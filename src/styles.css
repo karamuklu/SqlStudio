@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --panel: 210 40% 96%;
+  --elevated: 214 32% 91%;
+  --border: 214 24% 82%;
+  --muted: 215 16% 47%;
+  --accent: 221 83% 56%;
+  --accent-foreground: 0 0% 100%;
+}
+
+.dark {
+  --background: 218 26% 10%;
+  --foreground: 213 31% 91%;
+  --panel: 218 25% 9%;
+  --elevated: 216 23% 14%;
+  --border: 217 19% 20%;
+  --muted: 218 17% 58%;
+  --accent: 221 91% 66%;
+  --accent-foreground: 0 0% 100%;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  min-width: 860px;
+  min-height: 620px;
+  overflow: hidden;
+  background: hsl(var(--background));
+  font-family: Inter, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+button, input { font: inherit; }
+
+kbd {
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.resize-handle {
+  position: relative;
+  z-index: 20;
+  background: hsl(var(--border));
+  touch-action: none;
+  transition: background 120ms ease;
+}
+
+.resize-handle:hover, .is-resizing .resize-handle { background: hsl(var(--accent)); }
+.resize-handle-x { cursor: col-resize; }
+.resize-handle-y { cursor: row-resize; }
+.is-resizing { cursor: grabbing; user-select: none; }
+
+.export-button {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+  padding: 0 7px;
+  color: hsl(var(--foreground));
+  font-size: 11px;
+}
+
+.export-button:hover { background: hsl(var(--elevated)); }
+.export-button svg { width: 12px; height: 12px; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: hsl(var(--panel)); }
+::-webkit-scrollbar-thumb { border: 2px solid hsl(var(--panel)); border-radius: 999px; background: hsl(var(--muted) / 0.65); }
+::-webkit-scrollbar-corner { background: hsl(var(--panel)); }
+
+ul[style*="--tree-line"]::before { left: var(--tree-line); }
