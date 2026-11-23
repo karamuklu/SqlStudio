@@ -1,10 +1,17 @@
 import type { ConnectionProfile } from "../types/connections";
 
+export function splitServerName(value: string) {
+  const [host, ...instanceParts] = value.trim().split("\\");
+  return { host, instance: instanceParts.join("\\") };
+}
+
 export function buildConnectionUrl(profile: Pick<ConnectionProfile, "host" | "port" | "instance" | "database">) {
-  const host = profile.host.trim() || "localhost";
+  const parsedServer = splitServerName(profile.host);
+  const host = parsedServer.host || "localhost";
+  const instance = profile.instance.trim() || parsedServer.instance;
   const port = profile.port || 1433;
   const parameters = [
-    profile.instance && `instance=${encodeURIComponent(profile.instance)}`,
+    instance && `instance=${encodeURIComponent(instance)}`,
     profile.database && `database=${encodeURIComponent(profile.database)}`,
   ].filter(Boolean);
   return `sqlserver://${host}:${port}${parameters.length ? `;${parameters.join(";")}` : ""}`;

@@ -1,6 +1,6 @@
 import { ChevronDown, LoaderCircle, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { buildConnectionUrl, parseConnectionUrl } from "../../lib/connection-url";
+import { buildConnectionUrl, parseConnectionUrl, splitServerName } from "../../lib/connection-url";
 import type { AdvancedProperty, ConnectionProfile } from "../../types/connections";
 
 type Tab = "general" | "options" | "ssh" | "schemas" | "advanced";
@@ -67,7 +67,7 @@ export function ConnectionForm(props: Props) {
   );
 }
 
-function GeneralTab({ profile, password, errors, instances, databases, busyAction, update, onPasswordChange, onDiscoverInstances, onLoadDatabases }: Props & { update: <K extends keyof ConnectionProfile>(key: K, value: ConnectionProfile[K], updateUrl?: boolean) => void }) {
+function GeneralTab({ profile, password, errors, instances, databases, busyAction, update, onChange, onPasswordChange, onDiscoverInstances, onLoadDatabases }: Props & { update: <K extends keyof ConnectionProfile>(key: K, value: ConnectionProfile[K], updateUrl?: boolean) => void }) {
   const authNeedsCredentials = profile.authType === "sqlServer" || profile.authType === "azureAdPassword";
   const applyUrl = (url: string) => {
     const parsed = parseConnectionUrl(url);
@@ -82,7 +82,7 @@ function GeneralTab({ profile, password, errors, instances, databases, busyActio
   return <div className="mx-auto max-w-[760px] space-y-4">
     <div className="flex items-center gap-5 rounded-lg border border-border bg-panel/60 px-4 py-3 text-[11px]"><span>Bağlantı türü: <b>varsayılan</b></span><span>Sürücü: <button className="text-accent hover:underline">Microsoft SQL Server</button></span><span className="ml-auto text-accent">Diğer seçenekler <ChevronDown className="inline h-3 w-3" /></span></div>
     <div className="grid grid-cols-[130px_1fr_95px_130px] items-center gap-x-3 gap-y-3">
-      <Label htmlFor="host">Sunucu</Label><div><input id="host" value={profile.host} onChange={(event) => update("host", event.target.value, true)} className={inputClass(errors.host)} />{errors.host && <ErrorText>{errors.host}</ErrorText>}</div>
+      <Label htmlFor="host">Sunucu</Label><div><input id="host" value={profile.host} onChange={(event) => { const server = splitServerName(event.target.value); const next = { ...profile, host: server.host, instance: server.instance || profile.instance }; onChange({ ...next, url: buildConnectionUrl(next) }); }} placeholder="SUNUCU veya SUNUCU\\INSTANCE" className={inputClass(errors.host)} />{errors.host && <ErrorText>{errors.host}</ErrorText>}</div>
       <Label htmlFor="port">Port</Label><div><input id="port" type="number" min={1} max={65535} placeholder="1433" value={profile.port || ""} onChange={(event) => update("port", Number(event.target.value), true)} className={inputClass(errors.port)} />{errors.port && <ErrorText>{errors.port}</ErrorText>}</div>
       <Label htmlFor="instance">Örnek (Instance)</Label><div className="relative"><input id="instance" list="instance-list" value={profile.instance} onChange={(event) => update("instance", event.target.value, true)} className={inputClass()} /><datalist id="instance-list">{instances.map((item) => <option key={item} value={item} />)}</datalist></div>
       <span /><button type="button" onClick={onDiscoverInstances} disabled={busyAction !== null} className="secondary-button">{busyAction === "instances" ? <LoaderCircle className="animate-spin" /> : <Radar />} Keşfet</button>

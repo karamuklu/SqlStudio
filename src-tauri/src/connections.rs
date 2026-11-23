@@ -154,17 +154,28 @@ fn resolve_password(request: &ConnectionRequest) -> Result<String, String> {
         .map_err(|_| "Parola girilmedi veya güvenli kasada kayıtlı parola bulunamadı.".to_string())
 }
 
+fn effective_host_instance(profile: &ConnectionProfile) -> (&str, Option<&str>) {
+    let raw_host = profile.host.trim();
+    if !profile.instance.trim().is_empty() {
+        return (raw_host.split_once('\\').map_or(raw_host, |(host, _)| host), Some(profile.instance.trim()));
+    }
+    raw_host
+        .split_once('\\')
+        .map_or((raw_host, None), |(host, instance)| (host.trim(), Some(instance.trim())))
+}
+
 fn build_config(request: &ConnectionRequest) -> Result<Config, String> {
     let profile = &request.profile;
     if profile.host.trim().is_empty() {
         return Err("Sunucu alanı boş olamaz.".to_string());
     }
 
+    let (host, instance) = effective_host_instance(profile);
     let mut config = Config::new();
-    config.host(profile.host.trim());
+    config.host(host);
     config.port(if profile.port == 0 { 1433 } else { profile.port });
-    if !profile.instance.trim().is_empty() {
-        config.instance_name(profile.instance.trim());
+    if let Some(instance) = instance.filter(|value| !value.is_empty()) {
+        config.instance_name(instance);
     }
     if !profile.database.trim().is_empty() {
         config.database(profile.database.trim());
@@ -219,9 +230,10 @@ async fn open_client(
         return Err("SSH tüneli yapılandırıldı ancak yerel tünel hizmeti henüz başlatılmadı.".to_string());
     }
 
+    let has_named_instance = effective_host_instance(&request.profile).1.is_some();
     let config = build_config(request)?;
     let timeout = Duration::from_secs(request.profile.connect_timeout_seconds.max(1));
-    let tcp = if request.profile.instance.trim().is_empty() {
+    let tcp = if !has_named_instance {
         tokio::time::timeout(timeout, TcpStream::connect(config.get_addr()))
             .await
             .map_err(|_| "Bağlantı zaman aşımına uğradı. Sunucu ve güvenlik duvarını kontrol edin.".to_string())?
@@ -250,8 +262,8 @@ fn translate_connection_error(error: &str) -> String {
     if lower.contains("refused") || lower.contains("actively refused") {
         return format!("Sunucu bağlantıyı reddetti. SQL Server TCP/IP ve port ayarlarını kontrol edin. ({error})");
     }
-    if lower.contains("name") || lower.contains("dns") {
-        return format!("Sunucu adı çözümlenemedi. Host veya DNS ayarını kontrol edin. ({error})");
+    if lower.contains("11001") || lower.contains("name") || lower.contains("dns") {
+        return format!("Sunucu adı çözümlenemedi. SUNUCU\\INSTANCE yazdıysanız instance adının doğru olduğunu ve SQL Server Browser hizmetinin çalıştığını kontrol edin. ({error})");
     }
     format!("SQL Server bağlantısı kurulamadı: {error}")
 }

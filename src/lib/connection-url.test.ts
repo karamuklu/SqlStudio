@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildConnectionUrl, parseConnectionUrl, validateConnection } from "./connection-url";
+import { buildConnectionUrl, parseConnectionUrl, splitServerName, validateConnection } from "./connection-url";
 import { createConnection } from "../types/connections";
 
 describe("connection URL", () => {
@@ -12,6 +12,11 @@ describe("connection URL", () => {
 
   it("imports JDBC SQL Server addresses", () => {
     expect(parseConnectionUrl("jdbc:sqlserver://localhost;databaseName=master")).toEqual({ host: "localhost", port: 1433, instance: "", database: "master" });
+  });
+
+  it("splits SSMS-style named instances", () => {
+    expect(splitServerName("MKA_WIN11\\MSSQL")).toEqual({ host: "MKA_WIN11", instance: "MSSQL" });
+    expect(buildConnectionUrl({ ...createConnection(), host: "MKA_WIN11\\MSSQL" })).toBe("sqlserver://MKA_WIN11:1433;instance=MSSQL");
   });
 });
 
