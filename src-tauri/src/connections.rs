@@ -1,0 +1,331 @@
+use serde::{Deserialize, Serialize};
+use std::{fs, path::PathBuf, time::Duration};
+use tauri::{AppHandle, Manager};
+use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
+
+const KEYRING_SERVICE: &str = "com.karamuklu.sqlstudio";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionProfile {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub color: String,
+    pub environment: String,
+    pub host: String,
+    pub port: u16,
+    pub instance: String,
+    pub database: String,
+    pub auth_type: String,
+    pub username: String,
+    pub save_password: String,
+    pub encrypt: bool,
+    pub trust_server_certificate: bool,
+    pub connect_timeout_seconds: u64,
+    pub query_timeout_seconds: u64,
+    pub application_name: String,
+    pub readonly: bool,
+    pub url: String,
+    pub ssh: SshConfig,
+    pub schemas: Vec<String>,
+    pub hide_system_databases: bool,
+    pub advanced: Vec<AdvancedProperty>,
+    #[serde(default)]
+    pub startup_sql: String,
+    #[serde(default = "default_true")]
+    pub auto_commit: bool,
+    #[serde(default = "default_schema")]
+    pub default_schema: String,
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u16,
+    #[serde(default)]
+    pub ca_certificate_path: String,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub date_format: String,
+}
+
+fn default_true() -> bool { true }
+fn default_schema() -> String { "dbo".to_string() }
+fn default_pool_size() -> u16 { 5 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: String,
+    pub private_key_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvancedProperty {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionRequest {
+    pub profile: ConnectionProfile,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionTestResult {
+    pub success: bool,
+    pub duration_ms: u128,
+    pub server_version: String,
+    pub server_name: String,
+    pub message: String,
+}
+
+fn profiles_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Uygulama veri klasörü bulunamadı: {error}"))?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Uygulama veri klasörü oluşturulamadı: {error}"))?;
+    Ok(directory.join("connections.json"))
+}
+
+#[tauri::command]
+pub fn load_connection_profiles(app: AppHandle) -> Result<Vec<ConnectionProfile>, String> {
+    let path = profiles_path(&app)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("Bağlantı tanımları okunamadı: {error}"))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("Bağlantı tanımları geçersiz: {error}"))
+}
+
+#[tauri::command]
+pub fn save_connection_profiles(
+    app: AppHandle,
+    profiles: Vec<ConnectionProfile>,
+) -> Result<(), String> {
+    let path = profiles_path(&app)?;
+    let temporary_path = path.with_extension("json.tmp");
+    let content = serde_json::to_string_pretty(&profiles)
+        .map_err(|error| format!("Bağlantı tanımları hazırlanamadı: {error}"))?;
+    fs::write(&temporary_path, content)
+        .map_err(|error| format!("Bağlantı tanımları yazılamadı: {error}"))?;
+    fs::rename(&temporary_path, &path)
+        .map_err(|error| format!("Bağlantı tanımları kaydedilemedi: {error}"))
+}
+
+fn credential_entry(connection_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, connection_id)
+        .map_err(|error| format!("Windows Credential Manager açılamadı: {error}"))
+}
+
+#[tauri::command]
+pub fn store_connection_password(connection_id: String, password: String) -> Result<(), String> {
+    credential_entry(&connection_id)?
+        .set_password(&password)
+        .map_err(|error| format!("Parola güvenli kasaya kaydedilemedi: {error}"))
+}
+
+#[tauri::command]
+pub fn delete_connection_password(connection_id: String) -> Result<(), String> {
+    match credential_entry(&connection_id)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("Kayıtlı parola silinemedi: {error}")),
+    }
+}
+
+fn resolve_password(request: &ConnectionRequest) -> Result<String, String> {
+    if let Some(password) = request.password.as_ref().filter(|value| !value.is_empty()) {
+        return Ok(password.clone());
+    }
+    credential_entry(&request.profile.id)?
+        .get_password()
+        .map_err(|_| "Parola girilmedi veya güvenli kasada kayıtlı parola bulunamadı.".to_string())
+}
+
+fn build_config(request: &ConnectionRequest) -> Result<Config, String> {
+    let profile = &request.profile;
+    if profile.host.trim().is_empty() {
+        return Err("Sunucu alanı boş olamaz.".to_string());
+    }
+
+    let mut config = Config::new();
+    config.host(profile.host.trim());
+    config.port(if profile.port == 0 { 1433 } else { profile.port });
+    if !profile.instance.trim().is_empty() {
+        config.instance_name(profile.instance.trim());
+    }
+    if !profile.database.trim().is_empty() {
+        config.database(profile.database.trim());
+    }
+    config.application_name(if profile.application_name.trim().is_empty() {
+        "SqlStudio"
+    } else {
+        profile.application_name.trim()
+    });
+    config.readonly(profile.readonly);
+    config.handshake_timeout(Some(Duration::from_secs(
+        profile.connect_timeout_seconds.max(1),
+    )));
+    config.command_timeout(Some(Duration::from_secs(
+        profile.query_timeout_seconds.max(1),
+    )));
+
+    if profile.encrypt {
+        config.encryption(EncryptionLevel::Required);
+        if profile.trust_server_certificate {
+            config.trust_cert();
+        }
+    } else {
+        config.encryption(EncryptionLevel::NotSupported);
+    }
+
+    match profile.auth_type.as_str() {
+        "integrated" => config.authentication(AuthMethod::Integrated),
+        "sqlServer" => {
+            if profile.username.trim().is_empty() {
+                return Err("SQL Server kimlik doğrulaması için kullanıcı adı zorunludur.".to_string());
+            }
+            config.authentication(AuthMethod::sql_server(
+                profile.username.trim(),
+                resolve_password(request)?,
+            ));
+        }
+        "azureAdPassword" => {
+            return Err("Azure AD kullanıcı/parola akışı erişim belirteci gerektirir; bu kimlik doğrulama türü henüz etkin değil.".to_string());
+        }
+        "none" => config.authentication(AuthMethod::None),
+        _ => return Err("Bilinmeyen kimlik doğrulama türü.".to_string()),
+    }
+
+    Ok(config)
+}
+
+async fn open_client(
+    request: &ConnectionRequest,
+) -> Result<Client<Compat<TcpStream>>, String> {
+    if request.profile.ssh.enabled {
+        return Err("SSH tüneli yapılandırıldı ancak yerel tünel hizmeti henüz başlatılmadı.".to_string());
+    }
+
+    let config = build_config(request)?;
+    let timeout = Duration::from_secs(request.profile.connect_timeout_seconds.max(1));
+    let tcp = if request.profile.instance.trim().is_empty() {
+        tokio::time::timeout(timeout, TcpStream::connect(config.get_addr()))
+            .await
+            .map_err(|_| "Bağlantı zaman aşımına uğradı. Sunucu ve güvenlik duvarını kontrol edin.".to_string())?
+            .map_err(|error| translate_connection_error(&error.to_string()))?
+    } else {
+        tokio::time::timeout(timeout, TcpStream::connect_named(&config))
+            .await
+            .map_err(|_| "SQL Browser yanıt vermedi. Instance adını veya 1434/UDP erişimini kontrol edin.".to_string())?
+            .map_err(|error| translate_connection_error(&error.to_string()))?
+    };
+    tcp.set_nodelay(true)
+        .map_err(|error| format!("TCP bağlantısı hazırlanamadı: {error}"))?;
+    Client::connect(config, tcp.compat_write())
+        .await
+        .map_err(|error| translate_connection_error(&error.to_string()))
+}
+
+fn translate_connection_error(error: &str) -> String {
+    let lower = error.to_lowercase();
+    if lower.contains("login failed") {
+        return format!("Kimlik doğrulama başarısız. Kullanıcı adı, parola ve yetkileri kontrol edin. ({error})");
+    }
+    if lower.contains("certificate") || lower.contains("tls") {
+        return format!("TLS sertifikası doğrulanamadı. Sertifika ayarlarını kontrol edin. ({error})");
+    }
+    if lower.contains("refused") || lower.contains("actively refused") {
+        return format!("Sunucu bağlantıyı reddetti. SQL Server TCP/IP ve port ayarlarını kontrol edin. ({error})");
+    }
+    if lower.contains("name") || lower.contains("dns") {
+        return format!("Sunucu adı çözümlenemedi. Host veya DNS ayarını kontrol edin. ({error})");
+    }
+    format!("SQL Server bağlantısı kurulamadı: {error}")
+}
+
+#[tauri::command]
+pub async fn test_sql_connection(
+    request: ConnectionRequest,
+) -> Result<ConnectionTestResult, String> {
+    let started = std::time::Instant::now();
+    let mut client = open_client(&request).await?;
+    let row = client
+        .simple_query(
+            "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')) AS version, @@SERVERNAME AS server_name",
+        )
+        .await
+        .map_err(|error| translate_connection_error(&error.to_string()))?
+        .into_row()
+        .await
+        .map_err(|error| translate_connection_error(&error.to_string()))?
+        .ok_or_else(|| "Sunucu sürüm bilgisi döndürmedi.".to_string())?;
+    let version = row.get::<&str, _>("version").unwrap_or("Bilinmiyor").to_string();
+    let server_name = row
+        .get::<&str, _>("server_name")
+        .unwrap_or(request.profile.host.as_str())
+        .to_string();
+
+    Ok(ConnectionTestResult {
+        success: true,
+        duration_ms: started.elapsed().as_millis(),
+        server_version: version,
+        server_name,
+        message: "Bağlantı başarılı.".to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn list_sql_databases(request: ConnectionRequest) -> Result<Vec<String>, String> {
+    let mut client = open_client(&request).await?;
+    let rows = client
+        .simple_query("SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")
+        .await
+        .map_err(|error| translate_connection_error(&error.to_string()))?
+        .into_first_result()
+        .await
+        .map_err(|error| translate_connection_error(&error.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.get::<&str, _>("name").map(str::to_string))
+        .collect())
+}
+
+#[tauri::command]
+pub async fn discover_sql_instances(host: String) -> Result<Vec<String>, String> {
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|error| format!("SQL Browser keşfi başlatılamadı: {error}"))?;
+    socket
+        .send_to(&[0x03], format!("{}:1434", host.trim()))
+        .await
+        .map_err(|error| format!("SQL Browser isteği gönderilemedi: {error}"))?;
+    let mut buffer = vec![0u8; 8192];
+    let (size, _) = tokio::time::timeout(Duration::from_secs(3), socket.recv_from(&mut buffer))
+        .await
+        .map_err(|_| "SQL Browser üç saniye içinde yanıt vermedi.".to_string())?
+        .map_err(|error| format!("SQL Browser yanıtı alınamadı: {error}"))?;
+    let response = String::from_utf8_lossy(&buffer[..size]);
+    let values: Vec<&str> = response.trim_matches(char::from(0)).split(';').collect();
+    let mut instances = Vec::new();
+    for pair in values.windows(2) {
+        if pair[0].eq_ignore_ascii_case("InstanceName") && !pair[1].is_empty() {
+            instances.push(pair[1].to_string());
+        }
+    }
+    instances.sort();
+    instances.dedup();
+    Ok(instances)
+}

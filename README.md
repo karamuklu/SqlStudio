@@ -1,6 +1,6 @@
 # SqlStudio
 
-SqlStudio is a Windows-first SQL Server desktop client. Phase 1 delivers the approved application shell only: a faithful SSMS-inspired layout, mock editor and result data, themes, resizing, and build automation. Database connectivity, query execution, schema discovery, credential storage, and automatic updates intentionally remain outside this phase.
+SqlStudio is a Windows-first SQL Server desktop client. It combines the approved SSMS-inspired shell with a native SQL Server connection manager. Query execution, live Object Explorer discovery and automatic updates remain later phases.
 
 ## Phase 1
 
@@ -13,23 +13,33 @@ SqlStudio is a Windows-first SQL Server desktop client. Phase 1 delivers the app
 - Dark and light themes
 - GitHub Actions checks and Windows Tauri build
 
+## Connection manager
+
+- DataGrip-inspired, theme-aware connection editor with General, Options, SSH/SSL, Schemas and Advanced tabs
+- Windows and SQL Server authentication through native Rust commands and `tiberius`
+- Connection test, SQL Browser instance discovery and database listing
+- Profiles in the Tauri application-data directory; passwords only in the operating-system keychain
+- Native and JDBC SQL Server URL import/parsing, validation, password-free JSON import/export
+- SSH settings are persisted in the UI model, but tunnelling is deliberately rejected with a clear error until the tunnel transport is implemented
+
 ## Architecture
 
 ```text
 src/
   components/
     layout/       Desktop shell and resize behavior
+    connections/  Connection list, editor tabs and dialog orchestration
     object-tree/  Phase 1 static Object Explorer
     query/        Monaco editor and query tabs
     results/      TanStack mock result grid
     ui/           Reusable shadcn-style primitives
   data/           Mock SQL, tree, and result rows
-  lib/            Shared helpers
+  lib/            Shared helpers and typed Tauri connection client
   store/          Zustand presentation state
-src-tauri/        Minimal Tauri 2 host (no SQL commands yet)
+src-tauri/        Tauri host, profile/keychain services and tiberius connection commands
 ```
 
-The front end owns presentation state and mock interactions. Future native capabilities will be exposed as narrow Tauri commands instead of allowing direct database access from the webview.
+The front end owns presentation state. Credentials and network access stay behind narrow Tauri commands; the webview never writes passwords to profile JSON.
 
 ## Development
 
@@ -52,7 +62,7 @@ Semantic Versioning is used. A future release phase should use Release Please to
 
 ## Phase boundaries
 
-Phase 2 and later will add the real SQL Server connection layer, OS keychain integration, query execution/cancellation, schema loading, IntelliSense, exports, session persistence, signed releases, and updater behavior. None of those controls claim to be functional in Phase 1.
+The connection-manager slice is functional. Later work adds query execution/cancellation, live Object Explorer loading, IntelliSense, result exports, session persistence, signed releases and updater behavior.
 
 ## License
 
