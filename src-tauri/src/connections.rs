@@ -186,13 +186,6 @@ fn build_config(request: &ConnectionRequest) -> Result<Config, String> {
         profile.application_name.trim()
     });
     config.readonly(profile.readonly);
-    config.handshake_timeout(Some(Duration::from_secs(
-        profile.connect_timeout_seconds.max(1),
-    )));
-    config.command_timeout(Some(Duration::from_secs(
-        profile.query_timeout_seconds.max(1),
-    )));
-
     if profile.encrypt {
         config.encryption(EncryptionLevel::Required);
         if profile.trust_server_certificate {
@@ -247,8 +240,9 @@ async fn open_client(
     };
     tcp.set_nodelay(true)
         .map_err(|error| format!("TCP bağlantısı hazırlanamadı: {error}"))?;
-    Client::connect(config, tcp.compat_write())
+    tokio::time::timeout(timeout, Client::connect(config, tcp.compat_write()))
         .await
+        .map_err(|_| "SQL Server oturum açma işlemi zaman aşımına uğradı.".to_string())?
         .map_err(|error| translate_connection_error(&error_chain(&error)))
 }
 
@@ -288,14 +282,18 @@ pub async fn test_sql_connection(
 ) -> Result<ConnectionTestResult, String> {
     let started = std::time::Instant::now();
     let mut client = open_client(&request).await?;
-    let row = client
-        .simple_query(
-            "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')) AS version, @@SERVERNAME AS server_name",
-        )
+    let query_timeout = Duration::from_secs(request.profile.query_timeout_seconds.max(1));
+    let row = tokio::time::timeout(query_timeout, async {
+        client
+            .simple_query(
+                "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')) AS version, @@SERVERNAME AS server_name",
+            )
+            .await?
+            .into_row()
+            .await
+    })
         .await
-        .map_err(|error| translate_connection_error(&error_chain(&error)))?
-        .into_row()
-        .await
+        .map_err(|_| "Bağlantı testi sorgusu zaman aşımına uğradı.".to_string())?
         .map_err(|error| translate_connection_error(&error_chain(&error)))?
         .ok_or_else(|| "Sunucu sürüm bilgisi döndürmedi.".to_string())?;
     let version = row.get::<&str, _>("version").unwrap_or("Bilinmiyor").to_string();
@@ -316,12 +314,16 @@ pub async fn test_sql_connection(
 #[tauri::command]
 pub async fn list_sql_databases(request: ConnectionRequest) -> Result<Vec<String>, String> {
     let mut client = open_client(&request).await?;
-    let rows = client
-        .simple_query("SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")
+    let query_timeout = Duration::from_secs(request.profile.query_timeout_seconds.max(1));
+    let rows = tokio::time::timeout(query_timeout, async {
+        client
+            .simple_query("SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")
+            .await?
+            .into_first_result()
+            .await
+    })
         .await
-        .map_err(|error| translate_connection_error(&error_chain(&error)))?
-        .into_first_result()
-        .await
+        .map_err(|_| "Veritabanı listesi sorgusu zaman aşımına uğradı.".to_string())?
         .map_err(|error| translate_connection_error(&error_chain(&error)))?;
     Ok(rows
         .into_iter()
