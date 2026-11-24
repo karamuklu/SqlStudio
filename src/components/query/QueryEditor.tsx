@@ -1,5 +1,4 @@
 import Editor, { type BeforeMount } from "@monaco-editor/react";
-import { mockSql } from "../../data/mock-data";
 import { useStudioStore } from "../../store/studio-store";
 
 const configureMonaco: BeforeMount = (monaco) => {
@@ -35,16 +34,22 @@ const configureMonaco: BeforeMount = (monaco) => {
 
 export function QueryEditor() {
   const theme = useStudioStore((state) => state.theme);
+  const activeTabId = useStudioStore((state) => state.activeQueryTab);
+  const activeTab = useStudioStore((state) => state.queryTabs.find((tab) => tab.id === state.activeQueryTab));
+  const updateQueryContent = useStudioStore((state) => state.updateQueryContent);
 
   return (
     <section className="min-h-0 bg-background">
       <Editor
         beforeMount={configureMonaco}
         defaultLanguage="sql"
-        defaultValue={mockSql}
+        value={activeTab?.content ?? ""}
+        onChange={(value) => { if (activeTabId) updateQueryContent(activeTabId, value ?? ""); }}
+        path={activeTabId || "empty-query"}
         theme={theme === "dark" ? "sqlstudio-dark" : "sqlstudio-light"}
         options={{
           automaticLayout: true,
+          readOnly: !activeTab,
           fontFamily: "Cascadia Code, Consolas, monospace",
           fontSize: 13,
           lineHeight: 20,

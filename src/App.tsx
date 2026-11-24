@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { DesktopShell } from "./components/layout/DesktopShell";
+import { ConnectionManagerDialog } from "./components/connections/ConnectionManagerDialog";
 import { useStudioStore } from "./store/studio-store";
 
 export function App() {
@@ -10,5 +11,5 @@ export function App() {
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
 
-  return <DesktopShell />;
+  return <><DesktopShell /><ConnectionManagerDialog /></>;
 }
