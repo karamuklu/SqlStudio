@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, time::Duration};
+use std::{error::Error as StdError, fs, path::PathBuf, time::Duration};
 use tauri::{AppHandle, Manager};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::{TcpStream, UdpSocket};
@@ -199,7 +199,8 @@ fn build_config(request: &ConnectionRequest) -> Result<Config, String> {
             config.trust_cert();
         }
     } else {
-        config.encryption(EncryptionLevel::NotSupported);
+        // Keep the login packet protected even when full-session encryption is disabled.
+        config.encryption(EncryptionLevel::Off);
     }
 
     match profile.auth_type.as_str() {
@@ -248,13 +249,13 @@ async fn open_client(
         .map_err(|error| format!("TCP bağlantısı hazırlanamadı: {error}"))?;
     Client::connect(config, tcp.compat_write())
         .await
-        .map_err(|error| translate_connection_error(&error.to_string()))
+        .map_err(|error| translate_connection_error(&error_chain(&error)))
 }
 
 fn translate_connection_error(error: &str) -> String {
     let lower = error.to_lowercase();
     if lower.contains("login failed") {
-        return format!("Kimlik doğrulama başarısız. Kullanıcı adı, parola ve yetkileri kontrol edin. ({error})");
+        return format!("Kimlik doğrulama başarısız. SSMS'te 'sa' ile bağlanıyorsanız Kimlik doğrulama alanında 'Kullanıcı adı ve parola'yı seçip aynı SQL hesabını kullanın. ({error})");
     }
     if lower.contains("certificate") || lower.contains("tls") {
         return format!("TLS sertifikası doğrulanamadı. Sertifika ayarlarını kontrol edin. ({error})");
@@ -268,6 +269,19 @@ fn translate_connection_error(error: &str) -> String {
     format!("SQL Server bağlantısı kurulamadı: {error}")
 }
 
+fn error_chain(error: &(dyn StdError + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let message = cause.to_string();
+        if !messages.contains(&message) {
+            messages.push(message);
+        }
+        source = cause.source();
+    }
+    messages.join(" → ")
+}
+
 #[tauri::command]
 pub async fn test_sql_connection(
     request: ConnectionRequest,
@@ -279,10 +293,10 @@ pub async fn test_sql_connection(
             "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')) AS version, @@SERVERNAME AS server_name",
         )
         .await
-        .map_err(|error| translate_connection_error(&error.to_string()))?
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?
         .into_row()
         .await
-        .map_err(|error| translate_connection_error(&error.to_string()))?
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?
         .ok_or_else(|| "Sunucu sürüm bilgisi döndürmedi.".to_string())?;
     let version = row.get::<&str, _>("version").unwrap_or("Bilinmiyor").to_string();
     let server_name = row
@@ -305,10 +319,10 @@ pub async fn list_sql_databases(request: ConnectionRequest) -> Result<Vec<String
     let rows = client
         .simple_query("SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")
         .await
-        .map_err(|error| translate_connection_error(&error.to_string()))?
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?
         .into_first_result()
         .await
-        .map_err(|error| translate_connection_error(&error.to_string()))?;
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?;
     Ok(rows
         .into_iter()
         .filter_map(|row| row.get::<&str, _>("name").map(str::to_string))

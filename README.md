@@ -58,11 +58,11 @@ npm run tauri dev
 - `dev`: optional integration branch for multi-feature work
 - `feature/*`: focused pull requests using Conventional Commits
 
-Semantic Versioning is used. A future release phase should use Release Please to prepare version/changelog pull requests, followed by a signed `v*` tag workflow that builds NSIS/MSI artifacts and Tauri updater metadata. The updater private key and optional Windows signing certificate stay in GitHub Actions secrets; only the updater public key is embedded in the app. For private repositories, release downloads should be served through an authenticated update service rather than embedding a GitHub token in the desktop client.
+Semantic Versioning is used. Pushing a `v*` tag starts the Windows release workflow, which builds the installer, signs the updater payload and publishes `latest.json` with the GitHub Release. The updater private key and optional Windows code-signing certificate stay in GitHub Actions secrets; only the updater public key is embedded in the app. The toolbar shows the installed version and can check, download, install and restart into a newer release. For private repositories, release downloads should be served through an authenticated update service rather than embedding a GitHub token in the desktop client.
 
 ## Phase boundaries
 
-The connection-manager slice is functional. Later work adds query execution/cancellation, live Object Explorer loading, IntelliSense, result exports, session persistence, signed releases and updater behavior.
+The connection-manager slice and signed Windows updater flow are functional. Later work adds query execution/cancellation, live Object Explorer loading, IntelliSense, result exports and session persistence.
 
 ## License
 
