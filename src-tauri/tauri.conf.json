@@ -36,7 +36,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI4MTE0NkQ2QTIxNjlFMkMKUldRc25oYWkxa1lSS0h4UGt2S04rRTN1WCtDbDB6NE9vWVc5aUxWWXB0SG02YmJ4UFVSNStNMloK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDMURGNEM2RTkwQ0U2OTEKUldTUjVnenB4dlFkSEhKOXdjd3U0c1ZtTHQvUTVoSndNbWFya25vQldYTDVnUXIrdkgxMWRJWEcK",
       "endpoints": [
         "https://github.com/karamuklu/SqlStudio/releases/latest/download/latest.json"
       ],
