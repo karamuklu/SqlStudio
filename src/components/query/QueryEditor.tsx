@@ -1,6 +1,6 @@
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
-import { automaticTableAlias, registerSqlCompletionProvider } from "../../lib/sql-language";
-import { useStudioStore } from "../../store/studio-store";
+import { automaticTableAlias, configureSqlMetadata, definitionTargetAtOffset, registerSqlCompletionProvider } from "../../lib/sql-language";
+import { objectChildrenKey, useStudioStore } from "../../store/studio-store";
 
 let sqlLanguageConfigured = false;
 
@@ -45,6 +45,22 @@ export function QueryEditor() {
   const activeTab = useStudioStore((state) => state.queryTabs.find((tab) => tab.id === state.activeQueryTab));
   const updateQueryContent = useStudioStore((state) => state.updateQueryContent);
   const runActiveQuery = useStudioStore((state) => state.runActiveQuery);
+  configureSqlMetadata(
+    () => {
+      const state = useStudioStore.getState();
+      return (state.databaseObjects[state.activeDatabase] ?? [])
+        .filter((object) => object.kind === "table" || object.kind === "view" || object.kind === "procedure" || object.kind === "function")
+        .map((object) => {
+          const children = state.objectChildren[objectChildrenKey(state.activeDatabase, object.schema, object.name)] ?? [];
+          return { schema: object.schema, name: object.name, kind: object.kind as "table" | "view" | "procedure" | "function", columns: children.filter((child) => child.kind === "column").map((child) => child.name) };
+        });
+    },
+    async (object) => {
+      const state = useStudioStore.getState();
+      const children = await state.loadObjectChildren(state.activeDatabase, object.schema, object.name);
+      return children.filter((child) => child.kind === "column").map((child) => child.name);
+    },
+  );
   const handleMount: OnMount = (editor, monaco) => {
     let applyingAlias = false;
     editor.onDidChangeModelContent((event) => {
@@ -65,6 +81,20 @@ export function QueryEditor() {
       applyingAlias = false;
     });
     editor.addCommand(monaco.KeyCode.F5, () => { void runActiveQuery(); });
+    editor.addAction({
+      id: "sqlstudio.open-object-definition",
+      label: "Go to SQL object definition",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB],
+      contextMenuGroupId: "navigation",
+      run: () => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) return;
+        const identifier = definitionTargetAtOffset(model.getValue(), model.getOffsetAt(position));
+        if (identifier) void useStudioStore.getState().openObjectDefinition(identifier);
+        else useStudioStore.setState({ statusMessage: "İmleci prosedür, fonksiyon, view veya trigger adının üzerine getirin" });
+      },
+    });
   };
 
   return (
@@ -99,4 +129,3 @@ export function QueryEditor() {
     </section>
   );
 }
-

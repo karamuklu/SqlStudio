@@ -1,6 +1,6 @@
 [package]
 name = "sqlstudio"
-version = "0.2.3"
+version = "0.2.4"
 description = "Modern SQL Server desktop studio"
 authors = ["Mustafa Karamuklu"]
 edition = "2021"
@@ -31,4 +31,3 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
-

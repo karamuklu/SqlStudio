@@ -29,7 +29,10 @@ interface StudioState {
   availableDatabases: string[];
   activeConnectionRequest: ConnectionRequest | null;
   databaseObjects: Record<string, DatabaseObject[]>;
+  objectChildren: Record<string, DatabaseObject[]>;
+  explorerErrors: Record<string, string>;
   explorerLoadingDatabases: string[];
+  explorerLoadingObjects: string[];
   queryRunning: boolean;
   queryResult: QueryExecutionResult;
   toggleTheme: () => void;
@@ -46,12 +49,15 @@ interface StudioState {
   activateConnection: (request: ConnectionRequest, databases: string[]) => Promise<void>;
   setActiveDatabase: (database: string) => Promise<void>;
   loadDatabaseObjects: (database: string, force?: boolean) => Promise<void>;
+  loadObjectChildren: (database: string, schema: string, objectName: string, force?: boolean) => Promise<DatabaseObject[]>;
+  openObjectDefinition: (identifier: string) => Promise<void>;
   refreshExplorer: () => Promise<void>;
   runActiveQuery: () => Promise<void>;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 const errorMessage = (error: unknown) => String(error).replace(/^Error:\s*/, "");
+export const objectChildrenKey = (database: string, schema: string, objectName: string) => `${database}\u0000${schema}\u0000${objectName}`;
 
 export const useStudioStore = create<StudioState>((set, get) => ({
   theme: "dark",
@@ -69,7 +75,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   availableDatabases: [],
   activeConnectionRequest: null,
   databaseObjects: {},
+  objectChildren: {},
+  explorerErrors: {},
   explorerLoadingDatabases: [],
+  explorerLoadingObjects: [],
   queryRunning: false,
   queryResult: emptyResult,
   toggleTheme: () => set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
@@ -93,7 +102,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   closeConnectionManager: () => set({ connectionManagerOpen: false }),
   activateConnection: async (request, databases) => {
     const database = request.profile.database || databases[0] || "master";
-    set({ activeConnectionName: request.profile.name, activeConnectionEnvironment: request.profile.environment, activeConnectionRequest: request, activeDatabase: database, availableDatabases: databases.length ? databases : [database], databaseObjects: {}, explorerLoadingDatabases: [], statusMessage: `${request.profile.name} bağlantısı seçildi` });
+    set({ activeConnectionName: request.profile.name, activeConnectionEnvironment: request.profile.environment, activeConnectionRequest: request, activeDatabase: database, availableDatabases: databases.length ? databases : [database], databaseObjects: {}, objectChildren: {}, explorerErrors: {}, explorerLoadingDatabases: [], explorerLoadingObjects: [], statusMessage: `${request.profile.name} bağlantısı seçildi` });
     await get().loadDatabaseObjects(database);
   },
   setActiveDatabase: async (activeDatabase) => {
@@ -106,11 +115,51 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set((state) => ({ explorerLoadingDatabases: [...state.explorerLoadingDatabases, database], statusMessage: `${database} objects are loading…` }));
     try {
       const result = await connectionApi.objects(activeConnectionRequest, database);
-      set((state) => ({ databaseObjects: { ...state.databaseObjects, [result.database]: result.objects }, statusMessage: `${result.database}: ${result.objects.length} objects loaded` }));
+      set((state) => ({ databaseObjects: { ...state.databaseObjects, [result.database]: result.objects }, explorerErrors: { ...state.explorerErrors, [database]: "" }, statusMessage: `${result.database}: ${result.objects.length} objects loaded` }));
     } catch (error) {
-      set((state) => ({ databaseObjects: { ...state.databaseObjects, [database]: [] }, statusMessage: `Object Explorer: ${errorMessage(error)}` }));
+      const message = errorMessage(error);
+      set((state) => ({ explorerErrors: { ...state.explorerErrors, [database]: message }, statusMessage: `Object Explorer: ${message}` }));
     } finally {
       set((state) => ({ explorerLoadingDatabases: state.explorerLoadingDatabases.filter((name) => name !== database) }));
+    }
+  },
+  loadObjectChildren: async (database, schema, objectName, force = false) => {
+    const key = objectChildrenKey(database, schema, objectName);
+    const state = get();
+    if (!state.activeConnectionRequest) return [];
+    if (!force && state.objectChildren[key]) return state.objectChildren[key];
+    if (state.explorerLoadingObjects.includes(key)) return state.objectChildren[key] ?? [];
+    set((current) => ({ explorerLoadingObjects: [...current.explorerLoadingObjects, key] }));
+    try {
+      const result = await connectionApi.objectChildren(state.activeConnectionRequest, database, schema, objectName);
+      set((current) => ({ objectChildren: { ...current.objectChildren, [key]: result.objects }, explorerErrors: { ...current.explorerErrors, [key]: "" } }));
+      return result.objects;
+    } catch (error) {
+      const message = errorMessage(error);
+      set((current) => ({ explorerErrors: { ...current.explorerErrors, [key]: message }, statusMessage: `Object Explorer: ${message}` }));
+      return [];
+    } finally {
+      set((current) => ({ explorerLoadingObjects: current.explorerLoadingObjects.filter((item) => item !== key) }));
+    }
+  },
+  openObjectDefinition: async (identifier) => {
+    const state = get();
+    if (!state.activeConnectionRequest) {
+      set({ statusMessage: "Tanımı açmak için önce bağlantı seçin" });
+      return;
+    }
+    set({ statusMessage: `${identifier} tanımı açılıyor…` });
+    try {
+      const object = await connectionApi.objectDefinition(state.activeConnectionRequest, state.activeDatabase, identifier);
+      const id = `definition-${crypto.randomUUID()}`;
+      const title = `${object.schema}.${object.name}.sql`;
+      set((current) => ({
+        queryTabs: [...current.queryTabs, { id, title, content: object.definition, dirty: false }],
+        activeQueryTab: id,
+        statusMessage: `${object.kind}: ${object.schema}.${object.name}`,
+      }));
+    } catch (error) {
+      set({ statusMessage: errorMessage(error), activeResultTab: "messages", queryResult: { ...emptyResult, message: errorMessage(error) } });
     }
   },
   refreshExplorer: async () => {
@@ -141,4 +190,3 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     }
   },
 }));
-

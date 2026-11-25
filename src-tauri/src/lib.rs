@@ -13,10 +13,11 @@ pub fn run() {
             connections::test_sql_connection,
             connections::list_sql_databases,
             connections::load_database_objects,
+            connections::load_object_children,
+            connections::load_object_definition,
             connections::execute_sql_query,
             connections::discover_sql_instances,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SqlStudio");
 }
-
