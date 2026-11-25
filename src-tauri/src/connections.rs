@@ -485,6 +485,7 @@ pub async fn load_object_definition(
     identifier: String,
 ) -> Result<ObjectDefinitionResult, String> {
     let request = request_for_database(request, &database)?;
+    let mut client = open_client(&request).await?;
     let mut parts = identifier.trim().replace('[', "").replace(']', "").split('.').map(str::to_string).collect::<Vec<_>>();
     let name = parts.pop().unwrap_or_default();
     if name.is_empty() { return Err("Tanımı açılacak nesne bulunamadı.".to_string()); }
