@@ -67,12 +67,14 @@ export interface SqlInstanceInfo {
   port: number;
 }
 
-export type DatabaseObjectKind = "table" | "view" | "procedure" | "function";
+export type DatabaseObjectKind = "table" | "view" | "procedure" | "function" | "column" | "key" | "index" | "trigger";
 
 export interface DatabaseObject {
   schema: string;
   name: string;
   kind: DatabaseObjectKind;
+  parentName?: string;
+  detail?: string;
 }
 
 export interface DatabaseObjectsResult {

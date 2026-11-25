@@ -4,6 +4,20 @@ All notable changes to this project will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-25
+
+### Added
+
+- Object Explorer now lists every database available on the connected SQL Server
+- Tables expose Columns, Keys, Indexes and Triggers as expandable child groups
+- Views expose their Columns as an expandable child group
+
+### Changed
+
+- Object Explorer category and child labels are now consistently English
+- Changing the active query database from the toolbar opens and loads that database in Object Explorer
+- Database metadata is loaded lazily and cached independently for responsive servers with many databases
+
 ## [0.2.2] - 2026-11-25
 
 ### Added

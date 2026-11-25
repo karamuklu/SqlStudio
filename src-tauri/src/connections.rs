@@ -103,6 +103,8 @@ pub struct DatabaseObject {
     pub schema: String,
     pub name: String,
     pub kind: String,
+    pub parent_name: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -385,12 +387,41 @@ pub async fn load_database_objects(request: ConnectionRequest, database: String)
     let query_timeout = Duration::from_secs(request.profile.query_timeout_seconds.max(1));
     let rows = tokio::time::timeout(query_timeout, async {
         client.simple_query(
-            "SELECT s.name AS schema_name, o.name AS object_name,\
-             CASE WHEN o.type = 'U' THEN 'table' WHEN o.type = 'V' THEN 'view'\
-                  WHEN o.type = 'P' THEN 'procedure' ELSE 'function' END AS object_kind\
+            "SELECT schema_name, object_name, object_kind, parent_name, detail FROM (\
+             SELECT s.name AS schema_name, o.name AS object_name,\
+                    CASE WHEN o.type = 'U' THEN 'table' WHEN o.type = 'V' THEN 'view'\
+                         WHEN o.type = 'P' THEN 'procedure' ELSE 'function' END AS object_kind,\
+                    CAST(NULL AS sysname) AS parent_name, CAST(NULL AS nvarchar(256)) AS detail,\
+                    CASE o.type WHEN 'U' THEN 1 WHEN 'V' THEN 2 WHEN 'P' THEN 3 ELSE 4 END AS sort_group\
              FROM sys.objects o INNER JOIN sys.schemas s ON s.schema_id = o.schema_id\
              WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','FN','IF','TF')\
-             ORDER BY object_kind, s.name, o.name"
+             UNION ALL\
+             SELECT s.name, c.name, 'column', o.name,\
+                    ty.name + CASE WHEN ty.name IN ('varchar','char','varbinary','binary') THEN '(' + CASE WHEN c.max_length = -1 THEN 'max' ELSE CONVERT(varchar(10), c.max_length) END + ')'\
+                                   WHEN ty.name IN ('nvarchar','nchar') THEN '(' + CASE WHEN c.max_length = -1 THEN 'max' ELSE CONVERT(varchar(10), c.max_length / 2) END + ')'\
+                                   WHEN ty.name IN ('decimal','numeric') THEN '(' + CONVERT(varchar(10), c.precision) + ',' + CONVERT(varchar(10), c.scale) + ')' ELSE '' END\
+                    + CASE WHEN c.is_nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END, 5\
+             FROM sys.columns c INNER JOIN sys.objects o ON o.object_id = c.object_id\
+             INNER JOIN sys.schemas s ON s.schema_id = o.schema_id INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id\
+             WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V')\
+             UNION ALL\
+             SELECT s.name, kc.name, 'key', t.name, kc.type_desc, 6\
+             FROM sys.key_constraints kc INNER JOIN sys.tables t ON t.object_id = kc.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+             UNION ALL\
+             SELECT s.name, fk.name, 'key', t.name, 'FOREIGN KEY', 6\
+             FROM sys.foreign_keys fk INNER JOIN sys.tables t ON t.object_id = fk.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+             UNION ALL\
+             SELECT s.name, cc.name, 'key', t.name, 'CHECK CONSTRAINT', 6\
+             FROM sys.check_constraints cc INNER JOIN sys.tables t ON t.object_id = cc.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+             UNION ALL\
+             SELECT s.name, i.name, 'index', t.name, i.type_desc, 7\
+             FROM sys.indexes i INNER JOIN sys.tables t ON t.object_id = i.object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+             WHERE i.index_id > 0 AND i.name IS NOT NULL AND i.is_hypothetical = 0\
+             UNION ALL\
+             SELECT s.name, tr.name, 'trigger', t.name, CASE WHEN tr.is_disabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END, 8\
+             FROM sys.triggers tr INNER JOIN sys.tables t ON t.object_id = tr.parent_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+             WHERE tr.is_ms_shipped = 0\
+             ) objects ORDER BY sort_group, schema_name, parent_name, object_name"
         ).await?.into_first_result().await
     })
         .await
@@ -401,6 +432,8 @@ pub async fn load_database_objects(request: ConnectionRequest, database: String)
             schema: row.get::<&str, _>("schema_name")?.to_string(),
             name: row.get::<&str, _>("object_name")?.to_string(),
             kind: row.get::<&str, _>("object_kind")?.to_string(),
+            parent_name: row.get::<&str, _>("parent_name").map(str::to_string),
+            detail: row.get::<&str, _>("detail").map(str::to_string),
         })
     }).collect();
     Ok(DatabaseObjectsResult { database, objects })
