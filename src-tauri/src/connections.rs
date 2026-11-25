@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use futures_util::TryStreamExt;
 use std::{error::Error as StdError, fs, path::PathBuf, time::Duration};
 use tauri::{AppHandle, Manager};
-use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
+use tiberius::{AuthMethod, Client, ColumnData, Config, EncryptionLevel, FromSql, QueryItem, SqlBrowser};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
@@ -71,7 +73,7 @@ pub struct AdvancedProperty {
     pub value: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionRequest {
     pub profile: ConnectionProfile,
@@ -93,6 +95,31 @@ pub struct ConnectionTestResult {
 pub struct SqlInstanceInfo {
     pub name: String,
     pub port: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseObject {
+    pub schema: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseObjectsResult {
+    pub database: String,
+    pub objects: Vec<DatabaseObject>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryExecutionResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+    pub duration_ms: u128,
+    pub message: String,
+    pub truncated: bool,
 }
 
 fn profiles_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -342,6 +369,118 @@ pub async fn list_sql_databases(request: ConnectionRequest) -> Result<Vec<String
         .collect())
 }
 
+fn request_for_database(mut request: ConnectionRequest, database: &str) -> Result<ConnectionRequest, String> {
+    let database = database.trim();
+    if database.is_empty() {
+        return Err("Veritabanı seçilmedi.".to_string());
+    }
+    request.profile.database = database.to_string();
+    Ok(request)
+}
+
+#[tauri::command]
+pub async fn load_database_objects(request: ConnectionRequest, database: String) -> Result<DatabaseObjectsResult, String> {
+    let request = request_for_database(request, &database)?;
+    let mut client = open_client(&request).await?;
+    let query_timeout = Duration::from_secs(request.profile.query_timeout_seconds.max(1));
+    let rows = tokio::time::timeout(query_timeout, async {
+        client.simple_query(
+            "SELECT s.name AS schema_name, o.name AS object_name,\
+             CASE WHEN o.type = 'U' THEN 'table' WHEN o.type = 'V' THEN 'view'\
+                  WHEN o.type = 'P' THEN 'procedure' ELSE 'function' END AS object_kind\
+             FROM sys.objects o INNER JOIN sys.schemas s ON s.schema_id = o.schema_id\
+             WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','FN','IF','TF')\
+             ORDER BY object_kind, s.name, o.name"
+        ).await?.into_first_result().await
+    })
+        .await
+        .map_err(|_| "Veritabanı nesneleri sorgusu zaman aşımına uğradı.".to_string())?
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?;
+    let objects = rows.into_iter().filter_map(|row| {
+        Some(DatabaseObject {
+            schema: row.get::<&str, _>("schema_name")?.to_string(),
+            name: row.get::<&str, _>("object_name")?.to_string(),
+            kind: row.get::<&str, _>("object_kind")?.to_string(),
+        })
+    }).collect();
+    Ok(DatabaseObjectsResult { database, objects })
+}
+
+fn option_value<T: ToString>(value: &Option<T>) -> Value {
+    value.as_ref().map_or(Value::Null, |value| Value::String(value.to_string()))
+}
+
+fn converted_value<'a, T>(value: &'a ColumnData<'static>) -> Value
+where
+    T: FromSql<'a> + ToString,
+{
+    T::from_sql(value).ok().flatten().map_or(Value::Null, |value| Value::String(value.to_string()))
+}
+
+fn column_value(value: &ColumnData<'static>) -> Value {
+    match value {
+        ColumnData::U8(value) => value.map_or(Value::Null, |value| Value::from(value)),
+        ColumnData::I16(value) => value.map_or(Value::Null, |value| Value::from(value)),
+        ColumnData::I32(value) => value.map_or(Value::Null, |value| Value::from(value)),
+        ColumnData::I64(value) => value.map_or(Value::Null, |value| Value::from(value)),
+        ColumnData::F32(value) => value.and_then(|value| serde_json::Number::from_f64(value as f64)).map_or(Value::Null, Value::Number),
+        ColumnData::F64(value) => value.and_then(serde_json::Number::from_f64).map_or(Value::Null, Value::Number),
+        ColumnData::Bit(value) => value.map_or(Value::Null, Value::Bool),
+        ColumnData::String(value) => value.as_ref().map_or(Value::Null, |value| Value::String(value.to_string())),
+        ColumnData::Guid(value) => option_value(value),
+        ColumnData::Binary(value) => value.as_ref().map_or(Value::Null, |bytes| Value::String(bytes.iter().map(|byte| format!("{byte:02X}")).collect())),
+        ColumnData::Numeric(value) => option_value(value),
+        ColumnData::Xml(value) => value.as_ref().map_or(Value::Null, |value| Value::String(value.to_string())),
+        ColumnData::DateTime(_) => converted_value::<chrono::NaiveDateTime>(value),
+        ColumnData::SmallDateTime(_) => converted_value::<chrono::NaiveDateTime>(value),
+        ColumnData::Time(_) => converted_value::<chrono::NaiveTime>(value),
+        ColumnData::Date(_) => converted_value::<chrono::NaiveDate>(value),
+        ColumnData::DateTime2(_) => converted_value::<chrono::NaiveDateTime>(value),
+        ColumnData::DateTimeOffset(_) => converted_value::<chrono::DateTime<chrono::FixedOffset>>(value),
+    }
+}
+
+#[tauri::command]
+pub async fn execute_sql_query(request: ConnectionRequest, database: String, sql: String) -> Result<QueryExecutionResult, String> {
+    if sql.trim().is_empty() {
+        return Err("Çalıştırılacak SQL sorgusu boş.".to_string());
+    }
+    let request = request_for_database(request, &database)?;
+    let mut client = open_client(&request).await?;
+    let query_timeout = Duration::from_secs(request.profile.query_timeout_seconds.max(1));
+    let started = std::time::Instant::now();
+    let (columns, rows, truncated) = tokio::time::timeout(query_timeout, async {
+        let mut stream = client.simple_query(&sql).await?;
+        let mut columns = Vec::new();
+        let mut rows = Vec::new();
+        let mut result_index = None;
+        let mut truncated = false;
+        while let Some(item) = stream.try_next().await? {
+            match item {
+                QueryItem::Metadata(metadata) if result_index.is_none() => {
+                    result_index = Some(metadata.result_index());
+                    columns = metadata.columns().iter().map(|column| column.name().to_string()).collect();
+                }
+                QueryItem::Row(row) if Some(row.result_index()) == result_index => {
+                    if rows.len() >= 100_000 {
+                        truncated = true;
+                        continue;
+                    }
+                    rows.push(row.cells().map(|(_, value)| column_value(value)).collect());
+                }
+                _ => {}
+            }
+        }
+        Ok::<_, tiberius::error::Error>((columns, rows, truncated))
+    })
+        .await
+        .map_err(|_| "Sorgu zaman aşımına uğradı.".to_string())?
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?;
+    let duration_ms = started.elapsed().as_millis();
+    let message = if columns.is_empty() { format!("Sorgu başarıyla tamamlandı. ({duration_ms} ms)") } else { format!("{} satır döndü. ({duration_ms} ms)", rows.len()) };
+    Ok(QueryExecutionResult { columns, rows, duration_ms, message, truncated })
+}
+
 #[tauri::command]
 pub async fn discover_sql_instances(host: String) -> Result<Vec<SqlInstanceInfo>, String> {
     let socket = UdpSocket::bind("0.0.0.0:0")
@@ -396,3 +535,4 @@ mod tests {
         assert_eq!(instances[0].port, 64000);
     }
 }
+
