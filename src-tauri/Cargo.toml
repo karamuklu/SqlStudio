@@ -1,6 +1,6 @@
 [package]
 name = "sqlstudio"
-version = "0.2.2"
+version = "0.2.3"
 description = "Modern SQL Server desktop studio"
 authors = ["Mustafa Karamuklu"]
 edition = "2021"

@@ -1,46 +1,148 @@
-import { useMemo, useState } from "react";
-import { Boxes, ChevronDown, ChevronRight, Database, Folder, FunctionSquare, LoaderCircle, MonitorCog, RefreshCw, Table2, View } from "lucide-react";
-import type { DatabaseObjectKind } from "../../types/connections";
+import { useEffect, useState, type ComponentType } from "react";
+import {
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Columns3,
+  Database,
+  Folder,
+  FunctionSquare,
+  KeyRound,
+  List,
+  LoaderCircle,
+  MonitorCog,
+  RefreshCw,
+  Table2,
+  View,
+  Zap,
+} from "lucide-react";
 import { useStudioStore } from "../../store/studio-store";
+import type { DatabaseObject, DatabaseObjectKind } from "../../types/connections";
+import { cn } from "../../lib/cn";
 
-const icons = { table: Table2, view: View, procedure: Boxes, function: FunctionSquare } as const;
-const labels: Record<DatabaseObjectKind, string> = { table: "Tablolar", view: "Görünümler", procedure: "Saklı yordamlar", function: "Fonksiyonlar" };
+type Icon = ComponentType<{ className?: string }>;
+
+const rootGroups: Array<{ kind: DatabaseObjectKind; label: string; icon: Icon }> = [
+  { kind: "table", label: "Tables", icon: Table2 },
+  { kind: "view", label: "Views", icon: View },
+  { kind: "procedure", label: "Stored Procedures", icon: Boxes },
+  { kind: "function", label: "Functions", icon: FunctionSquare },
+];
+
+const tableGroups: Array<{ kind: DatabaseObjectKind; label: string; icon: Icon }> = [
+  { kind: "column", label: "Columns", icon: Columns3 },
+  { kind: "key", label: "Keys", icon: KeyRound },
+  { kind: "index", label: "Indexes", icon: List },
+  { kind: "trigger", label: "Triggers", icon: Zap },
+];
+
+function Caret({ open }: { open: boolean }) {
+  return open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />;
+}
+
+function ObjectLeaf({ item, depth, icon: ItemIcon }: { item: DatabaseObject; depth: number; icon: Icon }) {
+  const displayName = item.parentName ? item.name : `${item.schema}.${item.name}`;
+  return <li className="flex h-6 min-w-max items-center gap-1 pr-2" style={{ paddingLeft: depth * 18 + 4 }} title={item.detail ? `${item.schema}.${item.name} — ${item.detail}` : `${item.schema}.${item.name}`}>
+    <span className="w-3.5 shrink-0" /><ItemIcon className="h-3.5 w-3.5 shrink-0 text-blue-400" />
+    <span className="truncate">{displayName}</span>{item.detail && <span className="ml-1 text-[10px] text-muted">{item.detail}</span>}
+  </li>;
+}
+
+function DetailGroup({ label, icon: GroupIcon, items, depth }: { label: string; icon: Icon; items: DatabaseObject[]; depth: number }) {
+  const [open, setOpen] = useState(false);
+  return <li>
+    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
+      <Caret open={open} /><GroupIcon className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{label}</span><span className="text-muted">({items.length})</span>
+    </button>
+    {open && <ul>{items.map((item) => <ObjectLeaf key={`${item.kind}-${item.schema}-${item.parentName}-${item.name}`} item={item} depth={depth + 1} icon={GroupIcon} />)}</ul>}
+  </li>;
+}
+
+function TableNode({ table, objects, depth }: { table: DatabaseObject; objects: DatabaseObject[]; depth: number }) {
+  const [open, setOpen] = useState(false);
+  const children = objects.filter((item) => item.schema === table.schema && item.parentName === table.name);
+  return <li>
+    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
+      <Caret open={open} /><Table2 className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{table.schema}.{table.name}</span>
+    </button>
+    {open && <ul>{tableGroups.map((group) => <DetailGroup key={group.kind} label={group.label} icon={group.icon} items={children.filter((item) => item.kind === group.kind)} depth={depth + 1} />)}</ul>}
+  </li>;
+}
+
+function ViewNode({ view, objects, depth }: { view: DatabaseObject; objects: DatabaseObject[]; depth: number }) {
+  const [open, setOpen] = useState(false);
+  const columns = objects.filter((item) => item.kind === "column" && item.schema === view.schema && item.parentName === view.name);
+  return <li>
+    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
+      <Caret open={open} /><View className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{view.schema}.{view.name}</span>
+    </button>
+    {open && <ul><DetailGroup label="Columns" icon={Columns3} items={columns} depth={depth + 1} /></ul>}
+  </li>;
+}
+
+function RootGroup({ group, objects, depth }: { group: (typeof rootGroups)[number]; objects: DatabaseObject[]; depth: number }) {
+  const [open, setOpen] = useState(false);
+  const items = objects.filter((item) => item.kind === group.kind);
+  const GroupIcon = group.icon;
+  return <li>
+    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
+      <Caret open={open} /><Folder className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{group.label}</span><span className="text-muted">({items.length})</span>
+    </button>
+    {open && <ul>{items.map((item) => group.kind === "table"
+      ? <TableNode key={`${item.schema}-${item.name}`} table={item} objects={objects} depth={depth + 1} />
+      : group.kind === "view"
+        ? <ViewNode key={`${item.schema}-${item.name}`} view={item} objects={objects} depth={depth + 1} />
+        : <ObjectLeaf key={`${item.kind}-${item.schema}-${item.name}`} item={item} depth={depth + 1} icon={GroupIcon} />)}</ul>}
+  </li>;
+}
+
+function DatabaseNode({ database, active }: { database: string; active: boolean }) {
+  const [open, setOpen] = useState(active);
+  const objects = useStudioStore((state) => state.databaseObjects[database]);
+  const loading = useStudioStore((state) => state.explorerLoadingDatabases.includes(database));
+  const loadObjects = useStudioStore((state) => state.loadDatabaseObjects);
+  useEffect(() => {
+    if (active) {
+      setOpen(true);
+      void loadObjects(database);
+    }
+  }, [active, database, loadObjects]);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) void loadObjects(database);
+  };
+  return <li>
+    <button type="button" onClick={toggle} className={cn("flex h-6 min-w-max w-full items-center gap-1 pl-9 pr-2 text-left hover:bg-elevated", active && "font-semibold text-accent")}>
+      <Caret open={open} /><Database className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{database}</span>{loading && <LoaderCircle className="ml-1 h-3 w-3 animate-spin text-muted" />}
+    </button>
+    {open && <ul>{objects ? rootGroups.map((group) => <RootGroup key={group.kind} group={group} objects={objects} depth={3} />) : <li className="h-6 pl-[76px] text-[11px] leading-6 text-muted">Loading objects…</li>}</ul>}
+  </li>;
+}
 
 export function ObjectExplorer() {
   const connectionName = useStudioStore((state) => state.activeConnectionName);
-  const database = useStudioStore((state) => state.activeDatabase);
+  const activeDatabase = useStudioStore((state) => state.activeDatabase);
+  const databases = useStudioStore((state) => state.availableDatabases);
   const request = useStudioStore((state) => state.activeConnectionRequest);
-  const objects = useStudioStore((state) => state.databaseObjects);
-  const loading = useStudioStore((state) => state.explorerLoading);
+  const loading = useStudioStore((state) => state.explorerLoadingDatabases.length > 0);
   const refresh = useStudioStore((state) => state.refreshExplorer);
   const [serverOpen, setServerOpen] = useState(true);
-  const [databaseOpen, setDatabaseOpen] = useState(true);
-  const [openGroups, setOpenGroups] = useState<Set<DatabaseObjectKind>>(new Set(["table", "view", "procedure", "function"]));
-  const groups = useMemo(() => (["table", "view", "procedure", "function"] as const).map((kind) => ({ kind, items: objects.filter((item) => item.kind === kind) })), [objects]);
-  const toggleGroup = (kind: DatabaseObjectKind) => setOpenGroups((current) => { const next = new Set(current); if (next.has(kind)) next.delete(kind); else next.add(kind); return next; });
+  const [databasesOpen, setDatabasesOpen] = useState(true);
 
   return <aside className="flex min-h-0 flex-col overflow-hidden bg-panel">
     <div className="flex h-9 shrink-0 items-center border-b border-border px-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-      Nesne gezgini
-      <button type="button" disabled={!request || loading} title="Yenile" onClick={() => void refresh()} className="ml-auto rounded p-1 hover:bg-elevated disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /></button>
+      Object Explorer
+      <button type="button" disabled={!request || loading} title="Refresh" onClick={() => void refresh()} className="ml-auto rounded p-1 hover:bg-elevated disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /></button>
     </div>
     <div className="min-h-0 flex-1 overflow-auto py-1 text-[12px]">
-      {!request ? <button type="button" onClick={() => useStudioStore.getState().openConnectionManager()} className="m-2 rounded border border-border px-3 py-2 text-left text-muted hover:bg-elevated">Bağlantı seçmek için tıklayın</button> : <ul>
+      {!request ? <button type="button" onClick={() => useStudioStore.getState().openConnectionManager()} className="m-2 rounded border border-border px-3 py-2 text-left text-muted hover:bg-elevated">Click to select a connection</button> : <ul>
         <li>
-          <button type="button" onClick={() => setServerOpen((value) => !value)} className="flex h-6 w-full items-center gap-1 bg-elevated px-1 text-left font-semibold">
-            {serverOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}<MonitorCog className="h-3.5 w-3.5 text-blue-400" /><span className="truncate">{connectionName}</span>
-          </button>
-          {serverOpen && <ul>
-            <li>
-              <button type="button" onClick={() => setDatabaseOpen((value) => !value)} className="flex h-6 w-full items-center gap-1 pl-5 text-left hover:bg-elevated">
-                {databaseOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}<Database className="h-3.5 w-3.5 text-blue-400" /><span>{database}</span>{loading && <LoaderCircle className="ml-1 h-3 w-3 animate-spin text-muted" />}
-              </button>
-              {databaseOpen && <ul>{groups.map(({ kind, items }) => { const Icon = icons[kind]; const open = openGroups.has(kind); return <li key={kind}>
-                <button type="button" onClick={() => toggleGroup(kind)} className="flex h-6 w-full items-center gap-1 pl-10 text-left hover:bg-elevated">{open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}<Folder className="h-3.5 w-3.5 text-blue-400" />{labels[kind]} <span className="text-muted">({items.length})</span></button>
-                {open && <ul>{items.map((item) => <li key={`${kind}-${item.schema}-${item.name}`} className="flex h-6 items-center gap-1 pl-[62px] pr-2"><Icon className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span className="truncate" title={`${item.schema}.${item.name}`}>{item.schema}.{item.name}</span></li>)}</ul>}
-              </li>; })}</ul>}
-            </li>
-          </ul>}
+          <button type="button" onClick={() => setServerOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 bg-elevated px-1 text-left font-semibold"><Caret open={serverOpen} /><MonitorCog className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{connectionName}</span></button>
+          {serverOpen && <ul><li>
+            <button type="button" onClick={() => setDatabasesOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pl-[22px] pr-2 text-left hover:bg-elevated"><Caret open={databasesOpen} /><Folder className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>Databases</span><span className="text-muted">({databases.length})</span></button>
+            {databasesOpen && <ul>{databases.map((database) => <DatabaseNode key={database} database={database} active={database === activeDatabase} />)}</ul>}
+          </li></ul>}
         </li>
       </ul>}
     </div>

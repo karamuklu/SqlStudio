@@ -28,8 +28,8 @@ interface StudioState {
   activeDatabase: string;
   availableDatabases: string[];
   activeConnectionRequest: ConnectionRequest | null;
-  databaseObjects: DatabaseObject[];
-  explorerLoading: boolean;
+  databaseObjects: Record<string, DatabaseObject[]>;
+  explorerLoadingDatabases: string[];
   queryRunning: boolean;
   queryResult: QueryExecutionResult;
   toggleTheme: () => void;
@@ -45,6 +45,7 @@ interface StudioState {
   closeConnectionManager: () => void;
   activateConnection: (request: ConnectionRequest, databases: string[]) => Promise<void>;
   setActiveDatabase: (database: string) => Promise<void>;
+  loadDatabaseObjects: (database: string, force?: boolean) => Promise<void>;
   refreshExplorer: () => Promise<void>;
   runActiveQuery: () => Promise<void>;
 }
@@ -67,8 +68,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   activeDatabase: "master",
   availableDatabases: [],
   activeConnectionRequest: null,
-  databaseObjects: [],
-  explorerLoading: false,
+  databaseObjects: {},
+  explorerLoadingDatabases: [],
   queryRunning: false,
   queryResult: emptyResult,
   toggleTheme: () => set((state) => ({ theme: state.theme === "dark" ? "light" : "dark" })),
@@ -92,25 +93,31 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   closeConnectionManager: () => set({ connectionManagerOpen: false }),
   activateConnection: async (request, databases) => {
     const database = request.profile.database || databases[0] || "master";
-    set({ activeConnectionName: request.profile.name, activeConnectionEnvironment: request.profile.environment, activeConnectionRequest: request, activeDatabase: database, availableDatabases: databases.length ? databases : [database], databaseObjects: [], statusMessage: `${request.profile.name} bağlantısı seçildi` });
-    await get().refreshExplorer();
+    set({ activeConnectionName: request.profile.name, activeConnectionEnvironment: request.profile.environment, activeConnectionRequest: request, activeDatabase: database, availableDatabases: databases.length ? databases : [database], databaseObjects: {}, explorerLoadingDatabases: [], statusMessage: `${request.profile.name} bağlantısı seçildi` });
+    await get().loadDatabaseObjects(database);
   },
   setActiveDatabase: async (activeDatabase) => {
-    set({ activeDatabase, databaseObjects: [], statusMessage: `${activeDatabase} yükleniyor…` });
-    await get().refreshExplorer();
+    set({ activeDatabase, statusMessage: `${activeDatabase} aktif veritabanı olarak seçildi` });
+    await get().loadDatabaseObjects(activeDatabase);
+  },
+  loadDatabaseObjects: async (database, force = false) => {
+    const { activeConnectionRequest, databaseObjects, explorerLoadingDatabases } = get();
+    if (!activeConnectionRequest || (!force && databaseObjects[database]) || explorerLoadingDatabases.includes(database)) return;
+    set((state) => ({ explorerLoadingDatabases: [...state.explorerLoadingDatabases, database], statusMessage: `${database} objects are loading…` }));
+    try {
+      const result = await connectionApi.objects(activeConnectionRequest, database);
+      set((state) => ({ databaseObjects: { ...state.databaseObjects, [result.database]: result.objects }, statusMessage: `${result.database}: ${result.objects.length} objects loaded` }));
+    } catch (error) {
+      set((state) => ({ databaseObjects: { ...state.databaseObjects, [database]: [] }, statusMessage: `Object Explorer: ${errorMessage(error)}` }));
+    } finally {
+      set((state) => ({ explorerLoadingDatabases: state.explorerLoadingDatabases.filter((name) => name !== database) }));
+    }
   },
   refreshExplorer: async () => {
-    const { activeConnectionRequest, activeDatabase } = get();
+    const { activeConnectionRequest, activeDatabase, databaseObjects } = get();
     if (!activeConnectionRequest) return;
-    set({ explorerLoading: true });
-    try {
-      const result = await connectionApi.objects(activeConnectionRequest, activeDatabase);
-      set({ databaseObjects: result.objects, statusMessage: `${result.database}: ${result.objects.length} nesne yüklendi` });
-    } catch (error) {
-      set({ databaseObjects: [], statusMessage: `Nesne gezgini: ${errorMessage(error)}` });
-    } finally {
-      set({ explorerLoading: false });
-    }
+    const loadedDatabases = Object.keys(databaseObjects);
+    await Promise.all((loadedDatabases.length ? loadedDatabases : [activeDatabase]).map((database) => get().loadDatabaseObjects(database, true)));
   },
   runActiveQuery: async () => {
     const state = get();
