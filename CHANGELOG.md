@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-25
+
+### Added
+
+- Ctrl+B opens the live SQL definition for procedures, functions, views and triggers
+- IntelliSense now suggests live tables, views, procedures, functions and alias columns from the active database
+
+### Fixed
+
+- Object Explorer no longer times out by eagerly loading every column in large databases
+- Table and view details are loaded only when expanded, with visible retry errors
+
 ## [0.2.3] - 2026-11-25
 
 ### Added
@@ -54,4 +66,3 @@ All notable changes to this project will be documented here. The project follows
 - Mock Monaco editor and TanStack result grid
 - Resizable Object Explorer and result panels
 - Initial CI and Windows desktop build workflow
-

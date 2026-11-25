@@ -16,7 +16,7 @@ import {
   View,
   Zap,
 } from "lucide-react";
-import { useStudioStore } from "../../store/studio-store";
+import { objectChildrenKey, useStudioStore } from "../../store/studio-store";
 import type { DatabaseObject, DatabaseObjectKind } from "../../types/connections";
 import { cn } from "../../lib/cn";
 
@@ -58,29 +58,47 @@ function DetailGroup({ label, icon: GroupIcon, items, depth }: { label: string; 
   </li>;
 }
 
-function TableNode({ table, objects, depth }: { table: DatabaseObject; objects: DatabaseObject[]; depth: number }) {
+function TableNode({ database, table, depth }: { database: string; table: DatabaseObject; depth: number }) {
   const [open, setOpen] = useState(false);
-  const children = objects.filter((item) => item.schema === table.schema && item.parentName === table.name);
+  const key = objectChildrenKey(database, table.schema, table.name);
+  const children = useStudioStore((state) => state.objectChildren[key]);
+  const loading = useStudioStore((state) => state.explorerLoadingObjects.includes(key));
+  const error = useStudioStore((state) => state.explorerErrors[key]);
+  const loadChildren = useStudioStore((state) => state.loadObjectChildren);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) void loadChildren(database, table.schema, table.name);
+  };
   return <li>
-    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
-      <Caret open={open} /><Table2 className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{table.schema}.{table.name}</span>
+    <button type="button" onClick={toggle} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
+      <Caret open={open} /><Table2 className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{table.schema}.{table.name}</span>{loading && <LoaderCircle className="ml-1 h-3 w-3 animate-spin text-muted" />}
     </button>
-    {open && <ul>{tableGroups.map((group) => <DetailGroup key={group.kind} label={group.label} icon={group.icon} items={children.filter((item) => item.kind === group.kind)} depth={depth + 1} />)}</ul>}
+    {open && (error ? <button type="button" onClick={() => void loadChildren(database, table.schema, table.name, true)} className="h-6 pl-16 text-[11px] text-red-400">Failed to load · Retry</button> : children ? <ul>{tableGroups.map((group) => <DetailGroup key={group.kind} label={group.label} icon={group.icon} items={children.filter((item) => item.kind === group.kind)} depth={depth + 1} />)}</ul> : <div className="h-6 pl-16 text-[11px] leading-6 text-muted">Loading details…</div>)}
   </li>;
 }
 
-function ViewNode({ view, objects, depth }: { view: DatabaseObject; objects: DatabaseObject[]; depth: number }) {
+function ViewNode({ database, view, depth }: { database: string; view: DatabaseObject; depth: number }) {
   const [open, setOpen] = useState(false);
-  const columns = objects.filter((item) => item.kind === "column" && item.schema === view.schema && item.parentName === view.name);
+  const key = objectChildrenKey(database, view.schema, view.name);
+  const children = useStudioStore((state) => state.objectChildren[key]);
+  const loading = useStudioStore((state) => state.explorerLoadingObjects.includes(key));
+  const error = useStudioStore((state) => state.explorerErrors[key]);
+  const loadChildren = useStudioStore((state) => state.loadObjectChildren);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) void loadChildren(database, view.schema, view.name);
+  };
   return <li>
-    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
-      <Caret open={open} /><View className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{view.schema}.{view.name}</span>
+    <button type="button" onClick={toggle} className="flex h-6 min-w-max w-full items-center gap-1 pr-2 text-left hover:bg-elevated" style={{ paddingLeft: depth * 18 + 4 }}>
+      <Caret open={open} /><View className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{view.schema}.{view.name}</span>{loading && <LoaderCircle className="ml-1 h-3 w-3 animate-spin text-muted" />}
     </button>
-    {open && <ul><DetailGroup label="Columns" icon={Columns3} items={columns} depth={depth + 1} /></ul>}
+    {open && (error ? <button type="button" onClick={() => void loadChildren(database, view.schema, view.name, true)} className="h-6 pl-16 text-[11px] text-red-400">Failed to load · Retry</button> : children ? <ul><DetailGroup label="Columns" icon={Columns3} items={children.filter((item) => item.kind === "column")} depth={depth + 1} /></ul> : <div className="h-6 pl-16 text-[11px] leading-6 text-muted">Loading details…</div>)}
   </li>;
 }
 
-function RootGroup({ group, objects, depth }: { group: (typeof rootGroups)[number]; objects: DatabaseObject[]; depth: number }) {
+function RootGroup({ database, group, objects, depth }: { database: string; group: (typeof rootGroups)[number]; objects: DatabaseObject[]; depth: number }) {
   const [open, setOpen] = useState(false);
   const items = objects.filter((item) => item.kind === group.kind);
   const GroupIcon = group.icon;
@@ -89,9 +107,9 @@ function RootGroup({ group, objects, depth }: { group: (typeof rootGroups)[numbe
       <Caret open={open} /><Folder className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{group.label}</span><span className="text-muted">({items.length})</span>
     </button>
     {open && <ul>{items.map((item) => group.kind === "table"
-      ? <TableNode key={`${item.schema}-${item.name}`} table={item} objects={objects} depth={depth + 1} />
+      ? <TableNode key={`${item.schema}-${item.name}`} database={database} table={item} depth={depth + 1} />
       : group.kind === "view"
-        ? <ViewNode key={`${item.schema}-${item.name}`} view={item} objects={objects} depth={depth + 1} />
+        ? <ViewNode key={`${item.schema}-${item.name}`} database={database} view={item} depth={depth + 1} />
         : <ObjectLeaf key={`${item.kind}-${item.schema}-${item.name}`} item={item} depth={depth + 1} icon={GroupIcon} />)}</ul>}
   </li>;
 }
@@ -100,6 +118,7 @@ function DatabaseNode({ database, active }: { database: string; active: boolean 
   const [open, setOpen] = useState(active);
   const objects = useStudioStore((state) => state.databaseObjects[database]);
   const loading = useStudioStore((state) => state.explorerLoadingDatabases.includes(database));
+  const error = useStudioStore((state) => state.explorerErrors[database]);
   const loadObjects = useStudioStore((state) => state.loadDatabaseObjects);
   useEffect(() => {
     if (active) {
@@ -116,7 +135,7 @@ function DatabaseNode({ database, active }: { database: string; active: boolean 
     <button type="button" onClick={toggle} className={cn("flex h-6 min-w-max w-full items-center gap-1 pl-9 pr-2 text-left hover:bg-elevated", active && "font-semibold text-accent")}>
       <Caret open={open} /><Database className="h-3.5 w-3.5 shrink-0 text-blue-400" /><span>{database}</span>{loading && <LoaderCircle className="ml-1 h-3 w-3 animate-spin text-muted" />}
     </button>
-    {open && <ul>{objects ? rootGroups.map((group) => <RootGroup key={group.kind} group={group} objects={objects} depth={3} />) : <li className="h-6 pl-[76px] text-[11px] leading-6 text-muted">Loading objects…</li>}</ul>}
+    {open && <ul>{error ? <li><button type="button" onClick={() => void loadObjects(database, true)} title={error} className="h-6 pl-[76px] text-[11px] text-red-400">Failed to load · Retry</button></li> : objects ? rootGroups.map((group) => <RootGroup key={group.kind} database={database} group={group} objects={objects} depth={3} />) : <li className="h-6 pl-[76px] text-[11px] leading-6 text-muted">Loading objects…</li>}</ul>}
   </li>;
 }
 
@@ -149,4 +168,3 @@ export function ObjectExplorer() {
     <div className="h-3 shrink-0 border-t border-border bg-elevated" />
   </aside>;
 }
-

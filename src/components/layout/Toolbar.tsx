@@ -17,7 +17,7 @@ import { Button } from "../ui/button";
 import { useStudioStore } from "../../store/studio-store";
 
 export function Toolbar() {
-  const [version, setVersion] = useState("0.2.3");
+  const [version, setVersion] = useState("0.2.4");
   const [updateLabel, setUpdateLabel] = useState("Güncellemeleri denetle");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const theme = useStudioStore((state) => state.theme);
@@ -105,4 +105,3 @@ export function Toolbar() {
     </header>
   );
 }
-

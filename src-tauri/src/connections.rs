@@ -116,6 +116,15 @@ pub struct DatabaseObjectsResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ObjectDefinitionResult {
+    pub schema: String,
+    pub name: String,
+    pub kind: String,
+    pub definition: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueryExecutionResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Value>>,
@@ -387,41 +396,13 @@ pub async fn load_database_objects(request: ConnectionRequest, database: String)
     let query_timeout = Duration::from_secs(request.profile.query_timeout_seconds.max(1));
     let rows = tokio::time::timeout(query_timeout, async {
         client.simple_query(
-            "SELECT schema_name, object_name, object_kind, parent_name, detail FROM (\
-             SELECT s.name AS schema_name, o.name AS object_name,\
+            "SELECT s.name AS schema_name, o.name AS object_name,\
                     CASE WHEN o.type = 'U' THEN 'table' WHEN o.type = 'V' THEN 'view'\
                          WHEN o.type = 'P' THEN 'procedure' ELSE 'function' END AS object_kind,\
-                    CAST(NULL AS sysname) AS parent_name, CAST(NULL AS nvarchar(256)) AS detail,\
-                    CASE o.type WHEN 'U' THEN 1 WHEN 'V' THEN 2 WHEN 'P' THEN 3 ELSE 4 END AS sort_group\
+                    CAST(NULL AS nvarchar(128)) AS parent_name, CAST(NULL AS nvarchar(256)) AS detail\
              FROM sys.objects o INNER JOIN sys.schemas s ON s.schema_id = o.schema_id\
              WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','FN','IF','TF')\
-             UNION ALL\
-             SELECT s.name, c.name, 'column', o.name,\
-                    ty.name + CASE WHEN ty.name IN ('varchar','char','varbinary','binary') THEN '(' + CASE WHEN c.max_length = -1 THEN 'max' ELSE CONVERT(varchar(10), c.max_length) END + ')'\
-                                   WHEN ty.name IN ('nvarchar','nchar') THEN '(' + CASE WHEN c.max_length = -1 THEN 'max' ELSE CONVERT(varchar(10), c.max_length / 2) END + ')'\
-                                   WHEN ty.name IN ('decimal','numeric') THEN '(' + CONVERT(varchar(10), c.precision) + ',' + CONVERT(varchar(10), c.scale) + ')' ELSE '' END\
-                    + CASE WHEN c.is_nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END, 5\
-             FROM sys.columns c INNER JOIN sys.objects o ON o.object_id = c.object_id\
-             INNER JOIN sys.schemas s ON s.schema_id = o.schema_id INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id\
-             WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V')\
-             UNION ALL\
-             SELECT s.name, kc.name, 'key', t.name, kc.type_desc, 6\
-             FROM sys.key_constraints kc INNER JOIN sys.tables t ON t.object_id = kc.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
-             UNION ALL\
-             SELECT s.name, fk.name, 'key', t.name, 'FOREIGN KEY', 6\
-             FROM sys.foreign_keys fk INNER JOIN sys.tables t ON t.object_id = fk.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
-             UNION ALL\
-             SELECT s.name, cc.name, 'key', t.name, 'CHECK CONSTRAINT', 6\
-             FROM sys.check_constraints cc INNER JOIN sys.tables t ON t.object_id = cc.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
-             UNION ALL\
-             SELECT s.name, i.name, 'index', t.name, i.type_desc, 7\
-             FROM sys.indexes i INNER JOIN sys.tables t ON t.object_id = i.object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
-             WHERE i.index_id > 0 AND i.name IS NOT NULL AND i.is_hypothetical = 0\
-             UNION ALL\
-             SELECT s.name, tr.name, 'trigger', t.name, CASE WHEN tr.is_disabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END, 8\
-             FROM sys.triggers tr INNER JOIN sys.tables t ON t.object_id = tr.parent_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
-             WHERE tr.is_ms_shipped = 0\
-             ) objects ORDER BY sort_group, schema_name, parent_name, object_name"
+             ORDER BY CASE o.type WHEN 'U' THEN 1 WHEN 'V' THEN 2 WHEN 'P' THEN 3 ELSE 4 END, s.name, o.name"
         ).await?.into_first_result().await
     })
         .await
@@ -437,6 +418,100 @@ pub async fn load_database_objects(request: ConnectionRequest, database: String)
         })
     }).collect();
     Ok(DatabaseObjectsResult { database, objects })
+}
+
+fn sql_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[tauri::command]
+pub async fn load_object_children(
+    request: ConnectionRequest,
+    database: String,
+    schema: String,
+    object_name: String,
+) -> Result<DatabaseObjectsResult, String> {
+    let request = request_for_database(request, &database)?;
+    let mut client = open_client(&request).await?;
+    let schema = sql_literal(schema.trim());
+    let object_name = sql_literal(object_name.trim());
+    let sql = format!(
+        "DECLARE @object_id int = OBJECT_ID(N'[{}].[' + REPLACE(N'{}', ']', ']]') + N']');\
+         SELECT schema_name, object_name, object_kind, parent_name, detail FROM (\
+         SELECT s.name AS schema_name, c.name AS object_name, 'column' AS object_kind, o.name AS parent_name,\
+                ty.name + CASE WHEN ty.name IN ('varchar','char','varbinary','binary') THEN '(' + CASE WHEN c.max_length = -1 THEN 'max' ELSE CONVERT(varchar(10), c.max_length) END + ')'\
+                               WHEN ty.name IN ('nvarchar','nchar') THEN '(' + CASE WHEN c.max_length = -1 THEN 'max' ELSE CONVERT(varchar(10), c.max_length / 2) END + ')'\
+                               WHEN ty.name IN ('decimal','numeric') THEN '(' + CONVERT(varchar(10), c.precision) + ',' + CONVERT(varchar(10), c.scale) + ')' ELSE '' END\
+                + CASE WHEN c.is_nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END AS detail, c.column_id AS sort_order\
+         FROM sys.columns c INNER JOIN sys.objects o ON o.object_id = c.object_id\
+         INNER JOIN sys.schemas s ON s.schema_id = o.schema_id INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id\
+         WHERE c.object_id = @object_id\
+         UNION ALL SELECT s.name, kc.name, 'key', t.name, kc.type_desc, 10000\
+         FROM sys.key_constraints kc INNER JOIN sys.tables t ON t.object_id = kc.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE kc.parent_object_id = @object_id\
+         UNION ALL SELECT s.name, fk.name, 'key', t.name, 'FOREIGN KEY', 10001\
+         FROM sys.foreign_keys fk INNER JOIN sys.tables t ON t.object_id = fk.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE fk.parent_object_id = @object_id\
+         UNION ALL SELECT s.name, cc.name, 'key', t.name, 'CHECK CONSTRAINT', 10002\
+         FROM sys.check_constraints cc INNER JOIN sys.tables t ON t.object_id = cc.parent_object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE cc.parent_object_id = @object_id\
+         UNION ALL SELECT s.name, i.name, 'index', t.name, i.type_desc, 20000 + i.index_id\
+         FROM sys.indexes i INNER JOIN sys.tables t ON t.object_id = i.object_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+         WHERE i.object_id = @object_id AND i.index_id > 0 AND i.name IS NOT NULL AND i.is_hypothetical = 0\
+         UNION ALL SELECT s.name, tr.name, 'trigger', t.name, CASE WHEN tr.is_disabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END, 30000\
+         FROM sys.triggers tr INNER JOIN sys.tables t ON t.object_id = tr.parent_id INNER JOIN sys.schemas s ON s.schema_id = t.schema_id\
+         WHERE tr.parent_id = @object_id AND tr.is_ms_shipped = 0\
+         ) children ORDER BY sort_order, object_name",
+        schema, object_name
+    );
+    let rows = tokio::time::timeout(
+        Duration::from_secs(request.profile.query_timeout_seconds.max(1)),
+        async { client.simple_query(sql).await?.into_first_result().await },
+    )
+    .await
+    .map_err(|_| "Nesne ayrıntıları sorgusu zaman aşımına uğradı.".to_string())?
+    .map_err(|error| translate_connection_error(&error_chain(&error)))?;
+    let objects = rows.into_iter().filter_map(|row| Some(DatabaseObject {
+        schema: row.get::<&str, _>("schema_name")?.to_string(),
+        name: row.get::<&str, _>("object_name")?.to_string(),
+        kind: row.get::<&str, _>("object_kind")?.to_string(),
+        parent_name: row.get::<&str, _>("parent_name").map(str::to_string),
+        detail: row.get::<&str, _>("detail").map(str::to_string),
+    })).collect();
+    Ok(DatabaseObjectsResult { database, objects })
+}
+
+#[tauri::command]
+pub async fn load_object_definition(
+    request: ConnectionRequest,
+    database: String,
+    identifier: String,
+) -> Result<ObjectDefinitionResult, String> {
+    let request = request_for_database(request, &database)?;
+    let mut client = open_client(&request).await?;
+    let mut parts = identifier.trim().replace('[', "").replace(']', "").split('.').map(str::to_string).collect::<Vec<_>>();
+    let name = parts.pop().unwrap_or_default();
+    if name.is_empty() { return Err("Tanımı açılacak nesne bulunamadı.".to_string()); }
+    let schema_filter = parts.pop().filter(|value| !value.is_empty());
+    let schema_clause = schema_filter.as_ref().map_or(String::new(), |schema| format!(" AND s.name = N'{}'", sql_literal(schema)));
+    let sql = format!(
+        "SELECT TOP (1) s.name AS schema_name, o.name AS object_name,\
+         CASE WHEN o.type = 'P' THEN 'procedure' WHEN o.type = 'V' THEN 'view' WHEN o.type = 'TR' THEN 'trigger' ELSE 'function' END AS object_kind,\
+         m.definition FROM sys.objects o INNER JOIN sys.schemas s ON s.schema_id = o.schema_id\
+         LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id\
+         WHERE o.is_ms_shipped = 0 AND o.type IN ('P','V','TR','FN','IF','TF') AND o.name = N'{}'{}\
+         ORDER BY CASE WHEN s.name = 'dbo' THEN 0 ELSE 1 END, s.name",
+        sql_literal(&name), schema_clause
+    );
+    let row = client.simple_query(sql).await
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?
+        .into_row().await
+        .map_err(|error| translate_connection_error(&error_chain(&error)))?
+        .ok_or_else(|| format!("{} adlı prosedür, fonksiyon, view veya trigger bulunamadı.", identifier))?;
+    let definition = row.get::<&str, _>("definition").ok_or_else(|| "Nesne tanımı şifreli veya erişime kapalı.".to_string())?.to_string();
+    Ok(ObjectDefinitionResult {
+        schema: row.get::<&str, _>("schema_name").unwrap_or("dbo").to_string(),
+        name: row.get::<&str, _>("object_name").unwrap_or(&name).to_string(),
+        kind: row.get::<&str, _>("object_kind").unwrap_or("object").to_string(),
+        definition,
+    })
 }
 
 fn option_value<T: ToString>(value: &Option<T>) -> Value {
@@ -568,4 +643,3 @@ mod tests {
         assert_eq!(instances[0].port, 64000);
     }
 }
-

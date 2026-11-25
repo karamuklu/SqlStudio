@@ -82,6 +82,13 @@ export interface DatabaseObjectsResult {
   objects: DatabaseObject[];
 }
 
+export interface ObjectDefinitionResult {
+  schema: string;
+  name: string;
+  kind: "procedure" | "function" | "view" | "trigger" | "object";
+  definition: string;
+}
+
 export type SqlValue = string | number | boolean | null;
 
 export interface QueryExecutionResult {
@@ -124,4 +131,3 @@ export const createConnection = (index = 1): ConnectionProfile => ({
   language: "",
   dateFormat: "",
 });
-
