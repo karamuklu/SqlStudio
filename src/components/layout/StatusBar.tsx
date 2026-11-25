@@ -11,7 +11,7 @@ export function StatusBar() {
       <span>0 satır</span>
       <span className="flex-1" />
       <span>Satır 8, Sütun 24</span>
-      <span>v0.2.0</span>
+      <span>v0.2.1</span>
     </footer>
   );
 }

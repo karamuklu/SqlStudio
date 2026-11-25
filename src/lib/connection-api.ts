@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ConnectionProfile, ConnectionRequest, ConnectionTestResult } from "../types/connections";
+import type { ConnectionProfile, ConnectionRequest, ConnectionTestResult, SqlInstanceInfo } from "../types/connections";
 
 export const connectionApi = {
   load: () => invoke<ConnectionProfile[]>("load_connection_profiles"),
@@ -8,5 +8,5 @@ export const connectionApi = {
   deletePassword: (connectionId: string) => invoke<void>("delete_connection_password", { connectionId }),
   test: (request: ConnectionRequest) => invoke<ConnectionTestResult>("test_sql_connection", { request }),
   databases: (request: ConnectionRequest) => invoke<string[]>("list_sql_databases", { request }),
-  instances: (host: string) => invoke<string[]>("discover_sql_instances", { host }),
+  instances: (host: string) => invoke<SqlInstanceInfo[]>("discover_sql_instances", { host }),
 };

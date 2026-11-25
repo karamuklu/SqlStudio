@@ -1,7 +1,7 @@
 import { ChevronDown, LoaderCircle, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { buildConnectionUrl, parseConnectionUrl, splitServerName } from "../../lib/connection-url";
-import type { AdvancedProperty, ConnectionProfile } from "../../types/connections";
+import type { AdvancedProperty, ConnectionProfile, SqlInstanceInfo } from "../../types/connections";
 
 type Tab = "general" | "options" | "ssh" | "schemas" | "advanced";
 
@@ -9,7 +9,7 @@ interface Props {
   profile: ConnectionProfile;
   password: string;
   errors: Record<string, string>;
-  instances: string[];
+  instances: SqlInstanceInfo[];
   databases: string[];
   busyAction: "test" | "instances" | "databases" | null;
   onChange: (profile: ConnectionProfile) => void;
@@ -84,7 +84,7 @@ function GeneralTab({ profile, password, errors, instances, databases, busyActio
     <div className="grid grid-cols-[130px_1fr_95px_130px] items-center gap-x-3 gap-y-3">
       <Label htmlFor="host">Sunucu</Label><div><input id="host" value={profile.host} onChange={(event) => { const server = splitServerName(event.target.value); const next = { ...profile, host: server.host, instance: server.instance || profile.instance }; onChange({ ...next, url: buildConnectionUrl(next) }); }} placeholder="SUNUCU veya SUNUCU\\INSTANCE" className={inputClass(errors.host)} />{errors.host && <ErrorText>{errors.host}</ErrorText>}</div>
       <Label htmlFor="port">Port</Label><div><input id="port" type="number" min={1} max={65535} placeholder="1433" value={profile.port || ""} onChange={(event) => update("port", Number(event.target.value), true)} className={inputClass(errors.port)} />{errors.port && <ErrorText>{errors.port}</ErrorText>}</div>
-      <Label htmlFor="instance">Örnek (Instance)</Label><div className="relative"><input id="instance" list="instance-list" value={profile.instance} onChange={(event) => update("instance", event.target.value, true)} className={inputClass()} /><datalist id="instance-list">{instances.map((item) => <option key={item} value={item} />)}</datalist></div>
+      <Label htmlFor="instance">Örnek (Instance)</Label><div className="relative"><input id="instance" list="instance-list" value={profile.instance} onChange={(event) => { const selected = instances.find((item) => item.name.toLocaleLowerCase("tr") === event.target.value.toLocaleLowerCase("tr")); const next = { ...profile, instance: event.target.value, port: selected?.port ?? profile.port }; onChange({ ...next, url: buildConnectionUrl(next) }); }} className={inputClass()} /><datalist id="instance-list">{instances.map((item) => <option key={`${item.name}:${item.port}`} value={item.name}>{`${item.name} — port ${item.port}`}</option>)}</datalist></div>
       <span /><button type="button" onClick={onDiscoverInstances} disabled={busyAction !== null} className="secondary-button">{busyAction === "instances" ? <LoaderCircle className="animate-spin" /> : <Radar />} Keşfet</button>
       <Label htmlFor="auth">Kimlik doğrulama</Label><select id="auth" value={profile.authType} onChange={(event) => update("authType", event.target.value as ConnectionProfile["authType"])} className={`${inputClass()} col-span-3`}><option value="integrated">Windows kimlik bilgileri</option><option value="sqlServer">Kullanıcı adı ve parola</option><option value="azureAdPassword">Kullanıcı adı ve parola (Azure AD)</option><option value="none">Kimlik doğrulama yok</option></select>
       {profile.authType === "integrated" && <><span /><p className="col-span-3 -mt-1 text-[10px] leading-4 text-muted">Bu seçenek, uygulamayı açtığınız Windows hesabını kullanır. SSMS bağlantınızda kullanıcı adı <b className="text-foreground">sa</b> görünüyorsa “Kullanıcı adı ve parola” seçeneğini kullanın.</p></>}

@@ -1,5 +1,8 @@
-import Editor, { type BeforeMount } from "@monaco-editor/react";
+import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
+import { automaticTableAlias, registerSqlCompletionProvider } from "../../lib/sql-language";
 import { useStudioStore } from "../../store/studio-store";
+
+let sqlLanguageConfigured = false;
 
 const configureMonaco: BeforeMount = (monaco) => {
   monaco.editor.defineTheme("sqlstudio-dark", {
@@ -30,6 +33,10 @@ const configureMonaco: BeforeMount = (monaco) => {
     ],
     colors: { "editor.background": "#F8FAFC", "minimap.background": "#F8FAFC" },
   });
+  if (!sqlLanguageConfigured) {
+    registerSqlCompletionProvider(monaco);
+    sqlLanguageConfigured = true;
+  }
 };
 
 export function QueryEditor() {
@@ -37,11 +44,32 @@ export function QueryEditor() {
   const activeTabId = useStudioStore((state) => state.activeQueryTab);
   const activeTab = useStudioStore((state) => state.queryTabs.find((tab) => tab.id === state.activeQueryTab));
   const updateQueryContent = useStudioStore((state) => state.updateQueryContent);
+  const handleMount: OnMount = (editor, monaco) => {
+    let applyingAlias = false;
+    editor.onDidChangeModelContent((event) => {
+      if (applyingAlias || event.changes.length !== 1 || event.changes[0].text !== " ") return;
+      const model = editor.getModel();
+      const position = editor.getPosition();
+      if (!model || !position) return;
+      const lineBeforeCursor = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+      const alias = automaticTableAlias(lineBeforeCursor);
+      if (!alias) return;
+      applyingAlias = true;
+      editor.executeEdits("automatic-table-alias", [{
+        range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+        text: `${alias} `,
+        forceMoveMarkers: true,
+      }]);
+      editor.setPosition({ lineNumber: position.lineNumber, column: position.column + alias.length + 1 });
+      applyingAlias = false;
+    });
+  };
 
   return (
     <section className="min-h-0 bg-background">
       <Editor
         beforeMount={configureMonaco}
+        onMount={handleMount}
         defaultLanguage="sql"
         value={activeTab?.content ?? ""}
         onChange={(value) => { if (activeTabId) updateQueryContent(activeTabId, value ?? ""); }}
@@ -61,6 +89,9 @@ export function QueryEditor() {
           wordWrap: "off",
           renderLineHighlight: "none",
           overviewRulerBorder: false,
+          quickSuggestions: { other: true, comments: false, strings: false },
+          suggestOnTriggerCharacters: true,
+          tabCompletion: "on",
         }}
       />
     </section>
