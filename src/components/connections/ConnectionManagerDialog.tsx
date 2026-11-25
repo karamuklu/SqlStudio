@@ -12,7 +12,7 @@ type BusyAction = "test" | "instances" | "databases" | null;
 export function ConnectionManagerDialog() {
   const open = useStudioStore((state) => state.connectionManagerOpen);
   const close = useStudioStore((state) => state.closeConnectionManager);
-  const setActiveConnection = useStudioStore((state) => state.setActiveConnection);
+  const activateConnection = useStudioStore((state) => state.activateConnection);
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -140,8 +140,17 @@ export function ConnectionManagerDialog() {
 
   const confirm = async () => {
     if (!(await apply())) return;
-    const available = databases[selected.id] ?? (selected.database ? [selected.database] : []);
-    setActiveConnection(selected.name, selected.environment, selected.database || available[0] || "master", available);
+    setBusyAction("databases");
+    let available = databases[selected.id] ?? [];
+    try {
+      if (!available.length) available = await connectionApi.databases(request());
+      await activateConnection(request(), available);
+    } catch (error) {
+      reportError(error);
+      setBusyAction(null);
+      return;
+    }
+    setBusyAction(null);
     close();
   };
 
@@ -167,3 +176,4 @@ export function ConnectionManagerDialog() {
     </div>
   </div>;
 }
+

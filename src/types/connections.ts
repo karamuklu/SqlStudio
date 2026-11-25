@@ -67,6 +67,29 @@ export interface SqlInstanceInfo {
   port: number;
 }
 
+export type DatabaseObjectKind = "table" | "view" | "procedure" | "function";
+
+export interface DatabaseObject {
+  schema: string;
+  name: string;
+  kind: DatabaseObjectKind;
+}
+
+export interface DatabaseObjectsResult {
+  database: string;
+  objects: DatabaseObject[];
+}
+
+export type SqlValue = string | number | boolean | null;
+
+export interface QueryExecutionResult {
+  columns: string[];
+  rows: SqlValue[][];
+  durationMs: number;
+  message: string;
+  truncated: boolean;
+}
+
 export const createConnection = (index = 1): ConnectionProfile => ({
   id: crypto.randomUUID(),
   name: index === 1 ? "@localhost" : `@localhost ${index}`,
@@ -99,3 +122,4 @@ export const createConnection = (index = 1): ConnectionProfile => ({
   language: "",
   dateFormat: "",
 });
+

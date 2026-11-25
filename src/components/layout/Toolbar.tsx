@@ -17,12 +17,14 @@ import { Button } from "../ui/button";
 import { useStudioStore } from "../../store/studio-store";
 
 export function Toolbar() {
-  const [version, setVersion] = useState("0.2.1");
+  const [version, setVersion] = useState("0.2.2");
   const [updateLabel, setUpdateLabel] = useState("Güncellemeleri denetle");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const theme = useStudioStore((state) => state.theme);
   const toggleTheme = useStudioStore((state) => state.toggleTheme);
   const showMessage = useStudioStore((state) => state.showPhaseOneMessage);
+  const runActiveQuery = useStudioStore((state) => state.runActiveQuery);
+  const queryRunning = useStudioStore((state) => state.queryRunning);
   const openConnectionManager = useStudioStore((state) => state.openConnectionManager);
   const activeConnectionName = useStudioStore((state) => state.activeConnectionName);
   const activeConnectionEnvironment = useStudioStore((state) => state.activeConnectionEnvironment);
@@ -79,9 +81,9 @@ export function Toolbar() {
         <span className={`h-2 w-2 rounded-full ${activeConnectionEnvironment === "production" ? "bg-red-500" : "bg-emerald-500"}`} />
         {activeConnectionName}
       </Button>
-      <label className="relative shrink-0"><span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2"><Database className="h-3.5 w-3.5" /></span><select aria-label="Aktif veritabanı" value={activeDatabase} onChange={(event) => setActiveDatabase(event.target.value)} className="h-8 appearance-none rounded-md border border-border bg-panel pl-7 pr-7 text-xs font-medium outline-none hover:bg-elevated">{availableDatabases.length ? availableDatabases.map((name) => <option key={name}>{name}</option>) : <option>{activeDatabase}</option>}</select><ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2" /></label>
+      <label className="relative shrink-0"><span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2"><Database className="h-3.5 w-3.5" /></span><select aria-label="Aktif veritabanı" value={activeDatabase} onChange={(event) => void setActiveDatabase(event.target.value)} className="h-8 appearance-none rounded-md border border-border bg-panel pl-7 pr-7 text-xs font-medium outline-none hover:bg-elevated">{availableDatabases.length ? availableDatabases.map((name) => <option key={name}>{name}</option>) : <option>{activeDatabase}</option>}</select><ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2" /></label>
       <div className="mx-1 h-5 w-px bg-border" />
-      <Button variant="default" className="shrink-0" onClick={() => showMessage("Çalıştır")}>
+      <Button variant="default" className="shrink-0" disabled={queryRunning} onClick={() => void runActiveQuery()}>
         <Play className="h-3.5 w-3.5 fill-current" /> Çalıştır <kbd>F5</kbd>
       </Button>
       <Button className="shrink-0" onClick={() => showMessage("Durdur")}>
@@ -103,3 +105,4 @@ export function Toolbar() {
     </header>
   );
 }
+

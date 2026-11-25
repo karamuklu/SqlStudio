@@ -44,6 +44,7 @@ export function QueryEditor() {
   const activeTabId = useStudioStore((state) => state.activeQueryTab);
   const activeTab = useStudioStore((state) => state.queryTabs.find((tab) => tab.id === state.activeQueryTab));
   const updateQueryContent = useStudioStore((state) => state.updateQueryContent);
+  const runActiveQuery = useStudioStore((state) => state.runActiveQuery);
   const handleMount: OnMount = (editor, monaco) => {
     let applyingAlias = false;
     editor.onDidChangeModelContent((event) => {
@@ -63,6 +64,7 @@ export function QueryEditor() {
       editor.setPosition({ lineNumber: position.lineNumber, column: position.column + alias.length + 1 });
       applyingAlias = false;
     });
+    editor.addCommand(monaco.KeyCode.F5, () => { void runActiveQuery(); });
   };
 
   return (
@@ -97,3 +99,4 @@ export function QueryEditor() {
     </section>
   );
 }
+

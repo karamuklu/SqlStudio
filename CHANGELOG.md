@@ -4,6 +4,20 @@ All notable changes to this project will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-25
+
+### Added
+
+- Live Object Explorer for tables, views, stored procedures and functions
+- Real SQL query execution from the editor with F5 and dynamic result columns
+- Query progress, timing, messages and a 100,000-row safety limit
+
+### Fixed
+
+- Selected connection now remains the active session after closing the connection dialog
+- Database selection now refreshes the Object Explorer instead of showing prototype data
+- The Run button now executes the current editor contents against the selected database
+
 ## [0.2.0] - 2026-11-24
 
 ### Added
@@ -26,3 +40,4 @@ All notable changes to this project will be documented here. The project follows
 - Mock Monaco editor and TanStack result grid
 - Resizable Object Explorer and result panels
 - Initial CI and Windows desktop build workflow
+
