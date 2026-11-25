@@ -62,6 +62,11 @@ export interface ConnectionTestResult {
   message: string;
 }
 
+export interface SqlInstanceInfo {
+  name: string;
+  port: number;
+}
+
 export const createConnection = (index = 1): ConnectionProfile => ({
   id: crypto.randomUUID(),
   name: index === 1 ? "@localhost" : `@localhost ${index}`,

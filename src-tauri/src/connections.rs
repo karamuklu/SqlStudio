@@ -88,6 +88,13 @@ pub struct ConnectionTestResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlInstanceInfo {
+    pub name: String,
+    pub port: u16,
+}
+
 fn profiles_path(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
@@ -225,9 +232,13 @@ async fn open_client(
     }
 
     let has_named_instance = effective_host_instance(&request.profile).1.is_some();
+    // Port 1433 is the form default, so a named instance still needs SQL Browser.
+    // Once discovery supplies a non-default port, connect directly so the saved
+    // profile keeps working even when SQL Browser is later unavailable.
+    let use_sql_browser = has_named_instance && request.profile.port == 1433;
     let config = build_config(request)?;
     let timeout = Duration::from_secs(request.profile.connect_timeout_seconds.max(1));
-    let tcp = if !has_named_instance {
+    let tcp = if !use_sql_browser {
         tokio::time::timeout(timeout, TcpStream::connect(config.get_addr()))
             .await
             .map_err(|_| "Bağlantı zaman aşımına uğradı. Sunucu ve güvenlik duvarını kontrol edin.".to_string())?
@@ -332,7 +343,7 @@ pub async fn list_sql_databases(request: ConnectionRequest) -> Result<Vec<String
 }
 
 #[tauri::command]
-pub async fn discover_sql_instances(host: String) -> Result<Vec<String>, String> {
+pub async fn discover_sql_instances(host: String) -> Result<Vec<SqlInstanceInfo>, String> {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .map_err(|error| format!("SQL Browser keşfi başlatılamadı: {error}"))?;
@@ -346,14 +357,42 @@ pub async fn discover_sql_instances(host: String) -> Result<Vec<String>, String>
         .map_err(|_| "SQL Browser üç saniye içinde yanıt vermedi.".to_string())?
         .map_err(|error| format!("SQL Browser yanıtı alınamadı: {error}"))?;
     let response = String::from_utf8_lossy(&buffer[..size]);
-    let values: Vec<&str> = response.trim_matches(char::from(0)).split(';').collect();
-    let mut instances = Vec::new();
-    for pair in values.windows(2) {
-        if pair[0].eq_ignore_ascii_case("InstanceName") && !pair[1].is_empty() {
-            instances.push(pair[1].to_string());
-        }
-    }
-    instances.sort();
-    instances.dedup();
+    let mut instances = parse_sql_browser_response(&response);
+    instances.sort_by(|left, right| left.name.cmp(&right.name));
+    instances.dedup_by(|left, right| left.name.eq_ignore_ascii_case(&right.name));
     Ok(instances)
+}
+
+fn parse_sql_browser_response(response: &str) -> Vec<SqlInstanceInfo> {
+    response
+        .trim_matches(char::from(0))
+        .split(";;")
+        .filter_map(|record| {
+            let values: Vec<&str> = record.split(';').collect();
+            let value_for = |key: &str| {
+                values
+                    .chunks_exact(2)
+                    .find(|pair| pair[0].eq_ignore_ascii_case(key))
+                    .map(|pair| pair[1])
+            };
+            let name = value_for("InstanceName")?.trim();
+            let port = value_for("tcp")?.trim().parse::<u16>().ok()?;
+            (!name.is_empty()).then(|| SqlInstanceInfo { name: name.to_string(), port })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_sql_browser_response;
+
+    #[test]
+    fn parses_named_instance_and_dynamic_port() {
+        let instances = parse_sql_browser_response(
+            "ServerName;MKA_WIN11;InstanceName;MSSQL;IsClustered;No;Version;17.0;tcp;64000;np;pipe\\sql\\query;;",
+        );
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].name, "MSSQL");
+        assert_eq!(instances[0].port, 64000);
+    }
 }

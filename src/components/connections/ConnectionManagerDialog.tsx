@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Database, LoaderCircle, X } from "lucide-react";
 import { connectionApi } from "../../lib/connection-api";
-import { validateConnection } from "../../lib/connection-url";
+import { buildConnectionUrl, validateConnection } from "../../lib/connection-url";
 import { useStudioStore } from "../../store/studio-store";
-import { createConnection, type ConnectionProfile, type ConnectionTestResult } from "../../types/connections";
+import { createConnection, type ConnectionProfile, type ConnectionTestResult, type SqlInstanceInfo } from "../../types/connections";
 import { ConnectionForm } from "./ConnectionForm";
 import { ConnectionList } from "./ConnectionList";
 
@@ -17,7 +17,7 @@ export function ConnectionManagerDialog() {
   const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [passwords, setPasswords] = useState<Record<string, string>>({});
-  const [instances, setInstances] = useState<string[]>([]);
+  const [instances, setInstances] = useState<SqlInstanceInfo[]>([]);
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [result, setResult] = useState<ConnectionTestResult | { success: false; message: string } | null>(null);
@@ -111,7 +111,16 @@ export function ConnectionManagerDialog() {
   const discoverInstances = async () => {
     if (!selected?.host.trim()) return;
     setBusyAction("instances");
-    try { const names = await connectionApi.instances(selected.host); setInstances(names); setResult({ success: true, durationMs: 0, serverVersion: "", serverName: selected.host, message: names.length ? `${names.length} SQL Server örneği bulundu.` : "SQL Browser örnek döndürmedi." }); } catch (error) { reportError(error); } finally { setBusyAction(null); }
+    try {
+      const found = await connectionApi.instances(selected.host);
+      setInstances(found);
+      const matching = found.find((item) => item.name.toLocaleLowerCase("tr") === selected.instance.toLocaleLowerCase("tr")) ?? (found.length === 1 ? found[0] : undefined);
+      if (matching) {
+        const next = { ...selected, instance: matching.name, port: matching.port };
+        updateSelected({ ...next, url: buildConnectionUrl(next) });
+      }
+      setResult({ success: true, durationMs: 0, serverVersion: "", serverName: selected.host, message: found.length ? `${found.length} SQL Server örneği bulundu: ${found.map((item) => `${item.name} (${item.port})`).join(", ")}` : "SQL Browser örnek döndürmedi." });
+    } catch (error) { reportError(error); } finally { setBusyAction(null); }
   };
 
   const apply = async () => {
